@@ -37,12 +37,12 @@ function withMist(mat, anim) { // anim : le soldat est animé par la carte graph
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, mist, anim || {});
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWY;' + (anim ? `
-attribute vec4 aJ; attribute vec4 aW; attribute float aRow; uniform sampler2D uOs; uniform float uHaut;
-mat4 osM(float j){ int x=int(j+0.5)*3, y=int(aRow+0.5); vec4 a=texelFetch(uOs,ivec2(x,y),0), b=texelFetch(uOs,ivec2(x+1,y),0), c=texelFetch(uOs,ivec2(x+2,y),0);
+attribute vec4 aJ; attribute vec4 aW; attribute vec2 aRow; uniform sampler2D uOs; uniform float uHaut;
+mat4 osM(float j, float l){ int x=int(j+0.5)*3, y=int(l+0.5); vec4 a=texelFetch(uOs,ivec2(x,y),0), b=texelFetch(uOs,ivec2(x+1,y),0), c=texelFetch(uOs,ivec2(x+2,y),0);
   return mat4(a.x,b.x,c.x,0., a.y,b.y,c.y,0., a.z,b.z,c.z,0., a.w,b.w,c.w,1.); }` : ''))
       .replace('#include <project_vertex>', '#include <project_vertex>\nvec4 wpM=vec4(transformed,1.0);\n#ifdef USE_INSTANCING\nwpM=instanceMatrix*wpM;\n#endif\nwpM=modelMatrix*wpM;vWY=wpM.y;');
     if (anim) sh.vertexShader = sh.vertexShader
-      .replace('#include <beginnormal_vertex>', 'mat4 sk=(aW.x*osM(aJ.x)+aW.y*osM(aJ.y)+aW.z*osM(aJ.z)+aW.w*osM(aJ.w))/(aW.x+aW.y+aW.z+aW.w);\n#include <beginnormal_vertex>\nobjectNormal=mat3(sk)*objectNormal;')
+      .replace('#include <beginnormal_vertex>', 'float lA=floor(aRow.x),fB=fract(aRow.x);\nmat4 sk=((aW.x*osM(aJ.x,lA)+aW.y*osM(aJ.y,lA)+aW.z*osM(aJ.z,lA)+aW.w*osM(aJ.w,lA))*(1.0-fB)+(aW.x*osM(aJ.x,aRow.y)+aW.y*osM(aJ.y,aRow.y)+aW.z*osM(aJ.z,aRow.y)+aW.w*osM(aJ.w,aRow.y))*fB)/(aW.x+aW.y+aW.z+aW.w);\n#include <beginnormal_vertex>\nobjectNormal=mat3(sk)*objectNormal;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed=(sk*vec4(transformed,1.0)).xyz*uHaut;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWY;uniform float uMist,uTop,uBot;uniform vec3 uMistCol;')
       .replace('#include <fog_fragment>', '#include <fog_fragment>\ngl_FragColor.rgb=mix(gl_FragColor.rgb,uMistCol,uMist*smoothstep(uTop,uBot,vWY)*clamp(vFogDepth/900.0,0.12,1.0));');
@@ -153,11 +153,11 @@ function slot(r, k, out) { // place de la figurine k dans la formation, repère 
   const sx = r.form === 'ligne' ? 1.6 : 1.5, sz = r.form === 'ligne' ? 1.9 : 2.4;
   out[0] = ((k % cols) - (cols - 1) / 2) * sx; out[1] = (Math.floor(k / cols) - (rows - 1) / 2) * sz;
 }
-function pool(meshes, lignes) { // lignes : numéro d'image d'animation par figurine, partagé entre corps et fusil
+function pool(meshes, lignes) { // lignes : par figurine, les deux images d'animation à mélanger (la partie décimale donne le dosage), partagées entre corps et fusil
   meshes.forEach(m => { m.frustumCulled = false; m.instanceMatrix = meshes[0].instanceMatrix; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); if (lignes) m.geometry.setAttribute('aRow', lignes); scene.add(m); });
   const p = { meshes, M: meshes[0].instanceMatrix.array, R: lignes, n: 0 }; pools.push(p); return p;
 }
-const ligneAnim = n => { const a = new THREE.InstancedBufferAttribute(new Float32Array(n), 1); a.setUsage(THREE.DynamicDrawUsage); return a; };
+const ligneAnim = n => { const a = new THREE.InstancedBufferAttribute(new Float32Array(n * 2), 2); a.setUsage(THREE.DynamicDrawUsage); return a; };
 function build() {
   pools.forEach(p => p.meshes.forEach(m => { scene.remove(m); m.dispose(); })); pools = [];
   const N = regs.length * FIGS; sold = new Float32Array(N * 3);
@@ -358,7 +358,7 @@ function sim(dt) {
     if (r.n <= 0) return;
     if (dt > 0) combat(r, dt);
     if (r.n <= 0) return;
-    const fuite = r.etat === 'deroute';
+    const fuite = r.etat === 'deroute'; let avance = r.moving && Math.hypot(r.tx - r.x, r.tz - r.z) > 0.5; // le bataillon est en route : ses hommes marchent, même en pause
     if (r.moving && dt > 0) {
       const dx = r.tx - r.x, dz = r.tz - r.z, d = Math.hypot(dx, dz);
       const pente = Math.max(0, (altAt(r.x + dx / (d || 1) * 20, r.z + dz / (d || 1) * 20) - altAt(r.x, r.z)) / 20);
@@ -368,7 +368,7 @@ function sim(dt) {
       r.face += Math.sign(da) * Math.min(Math.abs(da), (fuite ? 1.2 : 0.35) * dt);
       const bloque = !fuite && r.ennemi && r.dEnn < CONTACT && Math.abs(ecart(cap(r, r.ennemi), Math.atan2(dx, -dz))) < 1.2; // pas de mêlée pour l'instant : on s'arrête au contact
       if (bloque) r.moving = false;
-      else if (d > 0.5) { const st = Math.min(d, v * dt * (Math.abs(da) > 0.6 ? 0.3 : 1)); r.x += dx / d * st; r.z += dz / d * st; }
+      else if (d > 0.5) { const st = Math.min(d, v * dt * (Math.abs(da) > 0.6 ? 0.3 : 1)); r.x += dx / d * st; r.z += dz / d * st; avance = true; }
       else if (fuite || Math.abs(da) < 0.01) r.moving = false;
     }
     const cs = Math.cos(r.face), sn = Math.sin(r.face), vmax = (fuite ? 4 : 2.6) * dt, md = MODELES[r.camp];
@@ -377,11 +377,12 @@ function sim(dt) {
       const i = ri * FIGS + k; slot(r, k, tmp); if (fuite) { tmp[0] += (rnd(i, 11) - 0.5) * 9; tmp[1] += (rnd(i, 13) - 0.5) * 9; } toWorld(r, tmp[0], tmp[1], tmp);
       let x = sold[i * 3], z = sold[i * 3 + 1]; const ex = tmp[0] - x, ez = tmp[1] - z, e = Math.hypot(ex, ez); let bob = 0, fait = 0;
       if (r.snap) { x = tmp[0]; z = tmp[1]; }
-      else if (e > 0.05 && dt > 0) { const st = Math.min(e, vmax * (0.8 + rnd(i, 5) * 0.4)); x += ex / e * st; z += ez / e * st; fait = st; if (!md) bob = Math.abs(Math.sin(t * 6 * Math.min(speed, 3) + sold[i * 3 + 2])) * 0.12 * SC; }
+      else if (e > 1e-4 && dt > 0) { const st = Math.min(e, vmax * (0.8 + rnd(i, 5) * 0.4)); x += ex / e * st; z += ez / e * st; fait = st; if (!md) bob = Math.abs(Math.sin(t * 6 * Math.min(speed, 3) + sold[i * 3 + 2])) * 0.12 * SC; }
       if (md) { // en marche, l'animation avance avec le chemin réellement parcouru : les pieds ne glissent pas
-        const c = e > 0.25 ? (fuite ? md.clips.course : md.clips.marche) : md.clips.attente;
-        if (c === md.clips.attente) P.R.array[P.n] = c[0] + Math.floor((tAnim * c[2] + rnd(i, 7) * 40) % c[1]);
-        else { sold[i * 3 + 2] = (sold[i * 3 + 2] + fait / (c[3] * HAUT)) % 1; P.R.array[P.n] = c[0] + Math.min(c[1] - 1, Math.floor(sold[i * 3 + 2] * c[1])); } }
+        const c = e > 0.25 || avance ? (fuite ? md.clips.course : md.clips.marche) : md.clips.attente; let pos;
+        if (c === md.clips.attente) pos = (tAnim * c[2] + rnd(i, 7) * 40) % c[1];
+        else { sold[i * 3 + 2] = (sold[i * 3 + 2] + fait / (c[3] * HAUT)) % 1; pos = sold[i * 3 + 2] * c[1]; }
+        const ia = Math.floor(pos) % c[1]; P.R.array[P.n * 2] = c[0] + ia + Math.min(0.999, pos - Math.floor(pos)); P.R.array[P.n * 2 + 1] = c[0] + (ia + 1) % c[1]; }
       sold[i * 3] = x; sold[i * 3 + 1] = z;
       const o = P.n++ * 16; // rotation autour de la verticale puis position
       M[o] = cs; M[o + 1] = 0; M[o + 2] = sn; M[o + 3] = 0; M[o + 4] = 0; M[o + 5] = 1; M[o + 6] = 0; M[o + 7] = 0;
