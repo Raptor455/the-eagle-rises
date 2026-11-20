@@ -16,6 +16,7 @@ Ouvrir `index.html` dans Chrome, Edge ou Firefox. La page contient tout, sans co
 - `src/heights.js` : le relief, tiré des deux images de `donnees/`.
 - `modeles/` : les modèles Meshy d'origine (.glb).
 - `outils/convertir_modele.py` : prépare un soldat animé pour la foule, avec son fusil (`python3 outils/convertir_modele.py modeles/fantassin-francais-anime.glb fr --fusil modeles/fusil-1777.glb`), résultat dans `src/modeles/`. Demande Python avec numpy et Pillow.
+- `outils/meshy/` : génère les modèles avec l'API Meshy à partir d'une liste d'unités (`npm run meshy`), voir `outils/meshy/LISEZ-MOI.md`.
 - `outils/assembler.js` : refait `index.html` (`npm install`, puis `npm run assembler`).
 
 ## À vérifier

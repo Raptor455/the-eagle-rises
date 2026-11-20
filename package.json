@@ -3,7 +3,8 @@
   "private": true,
   "description": "Batailles napoléoniennes en 3D : première démo, plateau de Pratzen (Austerlitz)",
   "scripts": {
-    "assembler": "node outils/assembler.js"
+    "assembler": "node outils/assembler.js",
+    "meshy": "node outils/meshy/generer.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
