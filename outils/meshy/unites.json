@@ -1,5 +1,5 @@
 {
-  "_aide": "Liste des modèles à générer. Lancer : npm run meshy (tout), npm run meshy -- fantassin-russe (un seul), npm run meshy -- --essai (montre le plan et le coût sans rien dépenser).",
+  "_aide": "Liste des modèles à générer. Lancer : npm run meshy (tout), npm run meshy -- fantassin-russe (un seul), npm run meshy -- --essai (montre le plan et le coût sans rien dépenser). Les unités faites à la main (fantassin-autrichien, canon-gribeauval) ne sont plus dans la liste. Les armes sont ajoutées par le jeu, les modèles sont générés mains vides.",
   "defauts": {
     "ai_model": "meshy-7.1",
     "target_polycount": 20000,
@@ -14,19 +14,79 @@
       "pose_mode": "a-pose",
       "squelette": true,
       "taille_m": 1.75,
-      "animations": { "walking": "Casual Walk", "running": "Run 2", "idle": "Idle 12", "shooting": "Walk Forward While Shooting" }
+      "animations": {
+        "walking": "Casual Walk",
+        "running": "Run 2",
+        "idle": "Idle 12",
+        "shooting": "Walk Forward While Shooting"
+      }
     },
     {
-      "nom": "fantassin-autrichien",
-      "prompt": "Austrian infantry soldier of 1805, Napoleonic wars, white coat with colored facings, white trousers, black leather helmet with crest (kaskett), cross belts, standing, full body, realistic proportions, no weapon in hands",
+      "nom": "cavalier-cuirassier-francais",
+      "prompt": "French Napoleonic cuirassier 1805, polished steel breastplate and backplate, steel helmet with brass crest and long black horsehair mane, red plume on the left side, dark blue coat with red collar, white breeches, tall black cavalry boots, white gauntlets, standing, full body, realistic proportions, empty hands, no weapon, no horse",
+      "texture_prompt": "polished steel cuirass, brass helmet crest, black horsehair, dark blue wool coat, white breeches, black leather boots",
       "pose_mode": "a-pose",
       "squelette": true,
       "taille_m": 1.75,
-      "animations": { "walking": "Casual Walk", "running": "Run 2", "idle": "Idle 12", "shooting": "Walk Forward While Shooting" }
+      "animations": {
+        "idle": "Idle 12",
+        "riding": "Riding"
+      }
     },
     {
-      "nom": "canon-gribeauval",
-      "prompt": "French Gribeauval 12-pounder field cannon of 1805 on its wooden carriage, olive green painted wood, bronze barrel, two large spoked wheels, trail on the ground",
+      "nom": "cavalier-russe",
+      "prompt": "Russian Napoleonic dragoon 1805, light green single-breasted kollet coat with red collar and cuffs, black leather helmet with black horsehair crest and brass front plate, white breeches, tall black cavalry boots, white crossbelt, standing, full body, realistic proportions, empty hands, no weapon, no horse",
+      "texture_prompt": "light green wool coat, red facings, black leather helmet, brass fittings, white breeches, black boots",
+      "pose_mode": "a-pose",
+      "squelette": true,
+      "taille_m": 1.75,
+      "animations": {
+        "idle": "Idle 12",
+        "riding": "Riding"
+      }
+    },
+    {
+      "nom": "cavalier-autrichien",
+      "prompt": "Austrian Napoleonic chevau-leger light cavalryman 1805, dark green coat with red collar and cuffs, black leather helmet with black and yellow wool crest and brass front plate, white breeches, tall black boots, white crossbelt, standing, full body, realistic proportions, empty hands, no weapon, no horse",
+      "texture_prompt": "dark green wool coat, red facings, black leather helmet with black-yellow crest, white breeches, black boots",
+      "pose_mode": "a-pose",
+      "squelette": true,
+      "taille_m": 1.75,
+      "animations": {
+        "idle": "Idle 12",
+        "riding": "Riding"
+      }
+    },
+    {
+      "nom": "cosaque-du-don",
+      "prompt": "Don Cossack 1805, dark blue knee-length kaftan, wide dark blue trousers with red side stripe, tall black fur cap with red top, black leather belt, short black boots, beard, standing, full body, realistic proportions, empty hands, no weapon, no horse",
+      "texture_prompt": "dark blue wool kaftan, red trouser stripe, black fur cap, worn leather",
+      "pose_mode": "a-pose",
+      "squelette": true,
+      "taille_m": 1.75,
+      "animations": {
+        "idle": "Idle 12",
+        "riding": "Riding"
+      }
+    },
+    {
+      "nom": "cheval-selle",
+      "prompt": "Napoleonic era bay cavalry horse 1805, saddled with leather saddle, sheepskin saddle cover, bridle and stirrups, no rider, standing, side view, realistic proportions",
+      "squelette": false
+    },
+    {
+      "nom": "cheval-lourd",
+      "prompt": "large black heavy cavalry horse 1805, Napoleonic cuirassier mount, saddled with leather saddle, blue saddle cloth with white trim, bridle and stirrups, no rider, standing, realistic proportions",
+      "squelette": false
+    },
+    {
+      "nom": "licorne-russe",
+      "prompt": "Russian Napoleonic 10-pounder licorne (unicorn howitzer) 1805, long bronze barrel with conical chamber and unicorn-shaped handles, on a pea-green painted wooden field carriage with black iron fittings, two large spoked wheels, trail on the ground, no crew",
+      "squelette": false
+    },
+    {
+      "nom": "canon-autrichien",
+      "prompt": "Austrian Napoleonic 6-pounder field cannon 1805, bronze barrel on an ochre-yellow painted wooden carriage with black iron fittings, two large spoked wheels, trail on the ground, no crew",
       "squelette": false
     }
   ]
