@@ -166,7 +166,7 @@ function build() {
   const nP = regs.filter(r => !MODELES[r.camp]).length * FIGS, coat = new THREE.InstancedMesh(gCoat, matCoat, nP), c = new THREE.Color(); let q = 0;
   provisoire = pool([coat, new THREE.InstancedMesh(gRest, matRest, nP)]);
   regs.forEach((r, ri) => { for (let k = 0; k < FIGS; k++) { const i = ri * FIGS + k;
-    sold[i * 3] = r.x; sold[i * 3 + 1] = r.z; sold[i * 3 + 2] = rnd(i, 7) * 6.28;
+    sold[i * 3] = r.x; sold[i * 3 + 1] = r.z; sold[i * 3 + 2] = rnd(i, 7); // position, et où en est le pas
     if (!MODELES[r.camp]) { c.setHex(CAMPS[r.camp].coul).multiplyScalar(0.85 + rnd(i, 3) * 0.3); coat.setColorAt(q++, c); } } r.snap = true;
     r.max = r.type === 'art' ? Math.min(FIGS, PIECES * SERVANTS) : FIGS;
     Object.assign(r, { n: r.max, deploi: 0, tirT: 0, moral: 100, etat: 'ok', recharge: rnd(ri, 1) * 20, sousFeu: 99, acc: 0, moving: false, tx: r.x, tz: r.z }); r.flag.children[1].material.color.setHex(CAMPS[r.camp].coul); r.flag.visible = true; });
@@ -375,10 +375,13 @@ function sim(dt) {
     const P = !md ? provisoire : Math.hypot(camera.position.x - r.x, camera.position.z - r.z, camera.position.y - yAt(r.x, r.z)) < LOD_DIST ? md.pPres : md.pLoin, M = P.M;
     for (let k = 0; k < r.n; k++) {
       const i = ri * FIGS + k; slot(r, k, tmp); if (fuite) { tmp[0] += (rnd(i, 11) - 0.5) * 9; tmp[1] += (rnd(i, 13) - 0.5) * 9; } toWorld(r, tmp[0], tmp[1], tmp);
-      let x = sold[i * 3], z = sold[i * 3 + 1]; const ex = tmp[0] - x, ez = tmp[1] - z, e = Math.hypot(ex, ez); let bob = 0;
+      let x = sold[i * 3], z = sold[i * 3 + 1]; const ex = tmp[0] - x, ez = tmp[1] - z, e = Math.hypot(ex, ez); let bob = 0, fait = 0;
       if (r.snap) { x = tmp[0]; z = tmp[1]; }
-      else if (e > 0.05 && dt > 0) { const st = Math.min(e, vmax * (0.8 + rnd(i, 5) * 0.4)); x += ex / e * st; z += ez / e * st; if (!md) bob = Math.abs(Math.sin(t * 6 * Math.min(speed, 3) + sold[i * 3 + 2])) * 0.12 * SC; }
-      if (md) { const c = e > 0.25 ? (fuite ? md.clips.course : md.clips.marche) : r.tirT > 0 && md.clips.tir ? md.clips.tir : md.clips.attente; P.R.array[P.n] = c[0] + Math.floor((tAnim * c[2] + sold[i * 3 + 2] * (c === md.clips.tir ? 1 : 7)) % c[1]); }
+      else if (e > 0.05 && dt > 0) { const st = Math.min(e, vmax * (0.8 + rnd(i, 5) * 0.4)); x += ex / e * st; z += ez / e * st; fait = st; if (!md) bob = Math.abs(Math.sin(t * 6 * Math.min(speed, 3) + sold[i * 3 + 2])) * 0.12 * SC; }
+      if (md) { // en marche, l'animation avance avec le chemin réellement parcouru : les pieds ne glissent pas
+        const c = e > 0.25 ? (fuite ? md.clips.course : md.clips.marche) : md.clips.attente;
+        if (c === md.clips.attente) P.R.array[P.n] = c[0] + Math.floor((tAnim * c[2] + rnd(i, 7) * 40) % c[1]);
+        else { sold[i * 3 + 2] = (sold[i * 3 + 2] + fait / (c[3] * HAUT)) % 1; P.R.array[P.n] = c[0] + Math.min(c[1] - 1, Math.floor(sold[i * 3 + 2] * c[1])); } }
       sold[i * 3] = x; sold[i * 3 + 1] = z;
       const o = P.n++ * 16; // rotation autour de la verticale puis position
       M[o] = cs; M[o + 1] = 0; M[o + 2] = sn; M[o + 3] = 0; M[o + 4] = 0; M[o + 5] = 1; M[o + 6] = 0; M[o + 7] = 0;

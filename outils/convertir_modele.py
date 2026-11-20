@@ -35,7 +35,11 @@ for nom, (mot, ips) in CLIPS.items():
     if not c: print('  animation absente :', nom); continue
     d = sq.duree(c); n = max(2, int(round(d * ips))); clips[nom] = [len(lignes), n, n / d]
     for i in range(n): lignes.append((N @ sq.pose(c, d * i / n)[0])[:, :3, :])
-    print('  animation', nom, '<-', c, ':', n, 'images')
+    # chemin parcouru par cycle : à chaque image, le pied le plus bas est posé et recule sous le corps d'autant que le soldat avance
+    pieds = np.array([[(N @ sq.pose(c, d * i / n)[1][noms.index(f'mixamorig:{cote}Foot')])[:3, 3] for cote in ('Left', 'Right')] for i in range(n + 1)])
+    pas = sum(abs(pieds[i + 1, k, 2] - pieds[i, k, 2]) for i in range(n) for k in [int(np.argmin((pieds[i, :, 1] + pieds[i + 1, :, 1])))])
+    clips[nom].append(round(float(pas), 4))
+    print('  animation', nom, '<-', c, ':', n, 'images, avance par cycle', clips[nom][3], '(hauteur du soldat = 1)')
 T = np.stack(lignes).astype(np.float16) # images x os x 3 lignes x 4
 out['anim'] = {'os': len(noms), 'images': len(lignes), 'clips': clips, 'table': b64(T)}
 
