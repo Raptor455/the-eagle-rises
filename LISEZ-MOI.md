@@ -4,7 +4,7 @@ Batailles des guerres napoléoniennes en 3D, pour jouer entre amis.
 
 Première démo : le plateau de Pratzen (Austerlitz, 2 décembre 1805), sur le relief réel.
 Pour l'instant : terrain, caméra, bataillons à sélectionner et à faire marcher, en ligne ou en colonne.
-Pas encore de combat, de moral ni de multijoueur.
+Premier combat : feu de salve, pertes, moral, déroute, IA alliée minimale. Pas encore de mêlée, de cavalerie, d'artillerie ni de multijoueur.
 
 ## Jouer
 Ouvrir `index.html` dans Chrome, Edge ou Firefox. La page contient tout, sans connexion.
