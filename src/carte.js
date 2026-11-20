@@ -100,11 +100,12 @@ export function construireCarte(scene, withMist) {
   }
 
   /* eau : ruisseaux tirés du relief */
-  const eau = [];
+  const eau = [], rives = [];
   for (const r of RUISSEAUX) {
     const pts = []; for (let k = 0; k < r.length; k += 3) if (!ETANGS.some(e => dansEtang(e, r[k], r[k + 1]) < 0.95)) pts.push([r[k], r[k + 1], 0.5 + r[k + 2]]);
     if (pts.length < 2) continue;
     const { g, fin } = ruban(pts, 7, 0.5); eau.push(g); fin.forEach(p => marque(p[0], p[1], 3.5 * p[2], 'eau'));
+    fin.forEach((p, k) => { if (rnd(p[0], p[1]) < 0.22 && k) { const q = fin[k - 1], dx = p[0] - q[0], dz = p[1] - q[1], l = Math.hypot(dx, dz) || 1, o = (rnd(p[1], p[0]) < 0.5 ? -1 : 1) * (6 + rnd(k, p[0]) * 9); rives.push([p[0] - dz / l * o, p[1] + dx / l * o, 0.7 + rnd(p[0], k) * 0.5]); } }); // saules et aulnes des rives
   }
   const matEau = withMist(new THREE.MeshLambertMaterial({ color: 0x6f8794, emissive: 0x18222a, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
   if (eau.length) scene.add(new THREE.Mesh(mergeGeometries(eau), matEau));
@@ -177,56 +178,96 @@ export function construireCarte(scene, withMist) {
 
   /* arbres d'hiver : tronc et houppier dénudé, répétés par la carte graphique */
   { const g = mergeGeometries([boite(0.6, 5, 0.6, 0, 2.5, 0, 0x4a3b2c), teinte(new THREE.IcosahedronGeometry(4.2, 0).translate(0, 7.5, 0).scale(1, 1.15, 1), 0x5d5446)]);
+    for (const a of rives) if (solAt(a[0], a[1]) === 'champ') arbres.push(a);
     const im = new THREE.InstancedMesh(g, matBati, arbres.length);
     arbres.forEach(([x, z, s], i) => { mQ.setFromAxisAngle(Y, rnd(x, z) * 6.28); mS.setScalar(s * (0.8 + rnd(z, x) * 0.5)); im.setMatrixAt(i, mM.compose(mV.set(x, yAt(x, z) - 0.3, z), mQ, mS)); im.setColorAt(i, col.setScalar(0.85 + rnd(x, 2) * 0.3)); });
     mS.setScalar(1); scene.add(im); }
 
-  /* sol : parcelles en lanières (champs moraves), labours, chaumes, prés, givre sur les hauteurs. Tout est calculé au pixel. */
+  /* sol, à la manière des jeux de stratégie : une texture de bruit répétée à plusieurs échelles mêle herbe d'hiver,
+     chaumes, labours et givre ; les champs ne sont qu'une teinte discrète par-dessus ; le grain accroche la lumière. */
   const g = new THREE.PlaneGeometry(WX, WZ, HW - 1, HH - 1); g.rotateX(-Math.PI / 2);
   const p = g.attributes.position, mod = new Float32Array(p.count * 4);
   for (let k = 0; k < p.count; k++) {
     const x = p.getX(k), z = p.getZ(k), a = altAt(x, z); p.setY(k, (a - H0) * VE);
     const pente = Math.hypot(altAt(x + 25, z) - altAt(x - 25, z), altAt(x, z + 25) - altAt(x, z - 25)) / 50;
-    mod[k * 4] = Math.min(1, Math.max(0, (pente - 0.09) * 9));            // pentes en prairie
-    mod[k * 4 + 1] = Math.min(1, Math.max(0, (205 - a) / 12));            // fonds humides
-    mod[k * 4 + 2] = Math.max(0, Math.min(0.55, (a - 235) / 110)) + 0.08; // givre
+    const creux = (altAt(x + 150, z) + altAt(x - 150, z) + altAt(x, z + 150) + altAt(x, z - 150)) / 4 - a; // > 0 : fond de vallon
+    mod[k * 4] = Math.min(1, Math.max(0, (pente - 0.07) * 10));                                   // pentes en herbe
+    mod[k * 4 + 1] = Math.min(1, Math.max(0, (205 - a) / 14) + Math.max(0, creux - 1.5) / 6);     // fonds humides
+    mod[k * 4 + 2] = Math.max(0, Math.min(1, (a - 215) / 100));                                   // givre avec l'altitude
     mod[k * 4 + 3] = Math.max(...ETANGS.map(e => Math.min(1, Math.max(0, (1.02 - dansEtang(e, x, z)) * 12)))); // glace
   }
   g.setAttribute('aMod', new THREE.BufferAttribute(mod, 4)); g.computeVertexNormals();
+  const bruit = (() => { // bruit répétable, 4 couches : R nuages, G grain fin, B mottes, A nuages (autre tirage)
+    const S = 512, d = new Uint8Array(S * S * 4), h = (x, y, s) => { const v = Math.sin(x * 127.1 + y * 311.7 + s * 74.7) * 43758.5453; return v - Math.floor(v); };
+    const couche = (per, oct, seed, billow) => { const o = new Float32Array(S * S); let amp = 1, tot = 0;
+      for (let q = 0; q < oct; q++, per *= 2, amp *= 0.5) { tot += amp; const c = S / per;
+        for (let y = 0; y < S; y++) { const fy = y / c, j = Math.floor(fy), b = fy - j, sb = b * b * (3 - 2 * b);
+          for (let x = 0; x < S; x++) { const fx = x / c, i = Math.floor(fx), a = fx - i, sa = a * a * (3 - 2 * a), i1 = (i + 1) % per, j1 = (j + 1) % per;
+            let v = (h(i, j, seed + q) * (1 - sa) + h(i1, j, seed + q) * sa) * (1 - sb) + (h(i, j1, seed + q) * (1 - sa) + h(i1, j1, seed + q) * sa) * sb;
+            if (billow) v = Math.abs(v * 2 - 1); o[y * S + x] += v * amp; } } }
+      let mn = 1e9, mx = -1e9; for (let k = 0; k < o.length; k++) { o[k] /= tot; mn = Math.min(mn, o[k]); mx = Math.max(mx, o[k]); }
+      for (let k = 0; k < o.length; k++) o[k] = (o[k] - mn) / (mx - mn); return o; };
+    [couche(4, 6, 1), couche(32, 4, 20), couche(8, 5, 40, true), couche(4, 6, 60)].forEach((o, c) => { for (let k = 0; k < S * S; k++) d[k * 4 + c] = o[k] * 255; });
+    const t = new THREE.DataTexture(d, S, S, THREE.RGBAFormat); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; t.anisotropy = 8; t.needsUpdate = true; return t;
+  })();
   const mat = withMist(new THREE.MeshLambertMaterial()), avant = mat.onBeforeCompile;
   mat.customProgramCacheKey = () => 'sol';
   mat.onBeforeCompile = sh => {
-    avant(sh);
+    avant(sh); sh.uniforms.uBruit = { value: bruit };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aMod; varying vec4 vMod; varying vec2 vXZ;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMod = aMod; vXZ = position.xz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-varying vec4 vMod; varying vec2 vXZ;
+varying vec4 vMod; varying vec2 vXZ; uniform sampler2D uBruit; vec3 solBosse;
 float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }
+vec4 nz(vec2 p, float s){ return texture2D(uBruit, p / s); }
 vec3 lin(vec3 c){ return pow(c, vec3(2.2)); }`)
       .replace('#include <color_fragment>', `
-{ vec2 p = vXZ, w = p + 160.0 * vec2(vn(p / 1100.0), vn(p / 1100.0 + 7.3)) - 80.0;
-  vec2 bc = floor(w / 750.0), blk = bc; float bd = 1e9;
-  for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) { vec2 c = bc + vec2(i, j), o = (c + 0.15 + 0.7 * vec2(h21(c), h21(c + 5.7))) * 750.0; float dd = dot(w - o, w - o); if (dd < bd) { bd = dd; blk = c; } } float an = h21(blk) * 3.1416, ca = cos(an), sa = sin(an);
+{ vec2 p = vXZ, pa = mat2(0.8, 0.6, -0.6, 0.8) * p, pb = mat2(0.36, -0.93, 0.93, 0.36) * p; // échelles tournées l'une par rapport à l'autre : pas de motif qui se répète
+  vec4 M = nz(p, 3100.0), K = nz(pa + 371.0, 730.0), K2 = nz(pb, 1670.0), D = nz(pb + 53.0, 97.0), F = nz(pa, 17.0), G = nz(p + 7.0, 4.3);
+  float loin = smoothstep(0.02, 0.5, fwidth(p.x));                      // 0 de près, 1 de loin
+  /* parcellaire : quartiers irréguliers, lanières à peu près parallèles dans un quartier, bords tremblés */
+  vec2 w = p + (K.ra - 0.5) * 90.0 + (M.ar - 0.5) * 420.0 + (D.ra - 0.5) * 9.0;
+  vec2 bc = floor(w / 950.0), blk = bc; float bd = 1e9;
+  for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) { vec2 c = bc + vec2(i, j), o = (c + 0.15 + 0.7 * vec2(h21(c), h21(c + 5.7))) * 950.0; float dd = dot(w - o, w - o); if (dd < bd) { bd = dd; blk = c; } }
+  float an = 0.45 + floor(h21(blk) * 2.0) * 1.5708 + (h21(blk + 9.0) - 0.5) * 0.5, ca = cos(an), sa = sin(an);
   vec2 q = vec2(ca * w.x + sa * w.y, -sa * w.x + ca * w.y);
-  float sw = 30.0 + h21(blk + 3.1) * 45.0, sid = floor(q.x / sw), sl = 260.0 + h21(vec2(sid, blk.x)) * 380.0;
-  float seg = floor((q.y + h21(vec2(blk.y, sid)) * sl) / sl), r = h21(vec2(sid, seg) + blk * 17.0);
-  vec3 labour = lin(vec3(0.47, 0.40, 0.31)), chaume = lin(vec3(0.62, 0.57, 0.42)), pre = lin(vec3(0.44, 0.49, 0.34)), friche = lin(vec3(0.53, 0.52, 0.40));
-  vec3 c = r < 0.38 ? labour : r < 0.66 ? chaume : r < 0.88 ? pre : friche;
-  float d = fwidth(q.x);
-  if (r < 0.38) c *= 0.88 + 0.16 * smoothstep(-0.3, 0.3, sin(q.x * 2.4)) * (1.0 - smoothstep(0.4, 1.2, d)); // sillons, effacés au loin
-  if (r >= 0.38 && r < 0.66) c *= 0.93 + 0.1 * smoothstep(-0.5, 0.5, sin(q.x * 4.0 + vn(p * 0.3) * 3.0)) * (1.0 - smoothstep(0.2, 0.8, d));
-  vec2 m = abs(fract(vec2(q.x / sw, (q.y + h21(vec2(blk.y, sid)) * sl) / sl)) - 0.5) * vec2(sw, sl);
-  float bord = 1.0 - smoothstep(0.0, 1.6 + d, min(sw * 0.5 - m.x, sl * 0.5 - m.y));
-  c = mix(c, pre * 0.85, bord * 0.7);                                       // talus herbeux entre parcelles
-  c *= 0.86 + 0.28 * vn(p / 9.0) * vn(p / 37.0 + 3.0) + 0.06 * vn(p / 2.3);   // mottes, taches
-  vec3 humide = lin(vec3(0.35, 0.40, 0.31)), givre = lin(vec3(0.87, 0.90, 0.89));
-  c = mix(c, pre, vMod.x * 0.8); c = mix(c, humide, vMod.y * 0.85);
-  c = mix(c, givre, clamp(vMod.z + 0.12 * (vn(p / 14.0) - 0.5), 0.0, 1.0));
-  vec3 glace = lin(vec3(0.74, 0.80, 0.83)) * (0.9 + 0.12 * vn(p / 30.0)) - 0.05 * smoothstep(0.92, 1.0, vn(p / 6.0 + vn(p / 40.0) * 4.0));
+  float sw = 55.0 + h21(blk + 3.1) * 90.0, sid = floor(q.x / sw), sl = 320.0 + h21(vec2(sid, blk.x)) * 520.0, qy = q.y + h21(vec2(blk.y, sid)) * sl;
+  float seg = floor(qy / sl), r = h21(vec2(sid, seg) + blk * 17.0), r2 = h21(vec2(seg, sid) + blk * 5.0);
+  vec2 m = (0.5 - abs(fract(vec2(q.x / sw, qy / sl)) - 0.5)) * vec2(sw, sl); float bord = 1.0 - smoothstep(0.5, 3.5 + fwidth(q.x) * 1.5, min(m.x, m.y));
+  vec3 herbe = lin(vec3(0.40, 0.43, 0.27)), seche = lin(vec3(0.56, 0.52, 0.34)), chaume = lin(vec3(0.63, 0.57, 0.37)), labour = lin(vec3(0.33, 0.27, 0.20)), terre = lin(vec3(0.42, 0.35, 0.26));
+  /* fond naturel : herbe d'hiver plus ou moins sèche, par grandes nappes */
+  vec3 fond = mix(herbe, seche, smoothstep(0.25, 0.75, M.r * 0.4 + K2.r * 0.35 + K.a * 0.25));
+  float estLabour = step(r, 0.24), estChaume = step(0.24, r) * step(r, 0.52);
+  vec3 champ = estLabour > 0.5 ? mix(labour, terre, r2 * 0.6) : estChaume > 0.5 ? mix(chaume, seche, r2 * 0.7) : mix(herbe, seche, r2);
+  champ *= 0.9 + 0.2 * h21(vec2(sid, seg) + 1.7);
+  /* sillons et rangs de chaume, visibles de près seulement */
+  float qs = (ca * p.x + sa * p.y) * (estLabour > 0.5 ? 2.6 : 5.2) + K.r * 5.0, rang = sin(qs), pres = 1.0 - smoothstep(0.15, 0.7, fwidth(p.x)); // sillons droits : coordonnée non tremblée
+  champ *= 1.0 + (estLabour * 0.22 + estChaume * 0.10) * rang * pres;
+  vec3 c = mix(fond, champ, 0.82 * (1.0 - 0.5 * smoothstep(0.55, 0.8, K2.b)));     // par endroits les champs s'effacent dans la friche
+  c = mix(c, herbe * 0.8, bord * 0.55);                                           // lisières herbeuses entre parcelles
+  /* matière : touffes, terre nue, mottes */
+  float grain = D.g * 0.45 + F.g * 0.35 + G.g * 0.2;
+  c = mix(c, terre, (1.0 - estLabour) * smoothstep(0.55, 0.85, F.b * 0.6 + D.b * 0.4) * 0.35);
+  c = mix(c, herbe * 0.7, (1.0 - estLabour) * smoothstep(0.6, 0.9, G.g) * 0.35 * (1.0 - loin));
+  c *= 0.84 + 0.4 * grain; c *= 0.9 + 0.2 * K.b;
+  /* pentes en herbe rase, fonds humides sombres et roussis */
+  c = mix(c, mix(herbe, seche, D.r) * (0.75 + 0.5 * grain), vMod.x * 0.85);
+  vec3 humide = mix(lin(vec3(0.27, 0.31, 0.21)), lin(vec3(0.45, 0.38, 0.24)), smoothstep(0.4, 0.7, D.a)) * (0.7 + 0.6 * grain);
+  c = mix(c, humide, clamp(vMod.y * (0.6 + 0.8 * K.a), 0.0, 1.0) * 0.9);
+  /* givre : par plaques, plus sur les hauteurs, dans les creux des sillons et à l'ombre */
+  float gv = vMod.z * 0.55 + (K2.a - 0.5) * 0.5 + (M.a - 0.5) * 0.4 + (nz(pa + 91.0, 1230.0).r - 0.5) * 0.3 + ((D.r - 0.5) * 0.3 + (F.g - 0.5) * 0.25) * (1.0 - loin) - estLabour * rang * pres * 0.12 + 0.1;
+  vec3 givre = lin(vec3(0.90, 0.93, 0.94)) * (0.88 + 0.2 * G.g);
+  c = mix(c, givre, smoothstep(0.42, 0.85, gv) * 0.7 + 0.05);
+  vec3 glace = lin(vec3(0.72, 0.79, 0.83)) * (0.88 + 0.16 * K.r) - 0.06 * smoothstep(0.80, 0.86, D.b) + 0.10 * smoothstep(0.6, 0.9, F.g * K.a * 1.6);
   c = mix(c, glace, smoothstep(0.0, 1.0, vMod.w));
-  diffuseColor.rgb = c; }`);
+  diffuseColor.rgb = c;
+  /* relief du grain sous la lumière rasante */
+  float e1 = 0.5, e2 = 0.12;
+  float hx = nz(pa + vec2(e1, 0.0), 17.0).g - nz(pa - vec2(e1, 0.0), 17.0).g + 0.6 * (nz(p + vec2(e2, 0.0) + 7.0, 4.3).g - nz(p - vec2(e2, 0.0) + 7.0, 4.3).g);
+  float hz = nz(pa + vec2(0.0, e1), 17.0).g - nz(pa - vec2(0.0, e1), 17.0).g + 0.6 * (nz(p + vec2(0.0, e2) + 7.0, 4.3).g - nz(p - vec2(0.0, e2) + 7.0, 4.3).g);
+  float cr = cos(qs) * (estLabour * 0.5 + estChaume * 0.15) * pres;
+  solBosse = (vec3(-hx, 0.0, -hz) * 0.55 + vec3(-ca, 0.0, -sa) * cr) * (1.0 - vMod.w); }`)
+      .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize(normal + (viewMatrix * vec4(solBosse, 0.0)).xyz);');
   };
   const ground = new THREE.Mesh(g, mat); scene.add(ground);
   return { ground, labels };
