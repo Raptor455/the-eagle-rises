@@ -1,35 +1,53 @@
-"""Prépare un modèle Meshy (.glb, un seul maillage, une texture) pour la foule :
-   python3 outils/convertir_modele.py modeles/fantassin-francais.glb fr
-   écrit src/modeles/fr.js : maillage détaillé, maillage allégé, texture réduite."""
-import sys, json, struct, base64, io, subprocess, tempfile, os
+"""Prépare un soldat Meshy animé (.glb avec squelette et animations) pour la foule.
+   python3 outils/convertir_modele.py modeles/fantassin-francais-anime.glb fr --fusil modeles/fusil-1777.glb
+   Écrit src/modeles/fr.js : maillage détaillé et allégé, texture réduite, fusil tenu en main droite,
+   et les animations sous forme d'une table de matrices d'os (une ligne par image)."""
+import sys, os, json, base64, io, subprocess, tempfile, argparse
 import numpy as np
-from PIL import Image
-src, nom = sys.argv[1], sys.argv[2]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from glb import Glb, Squelette
 racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-f = open(src, 'rb').read(); n = struct.unpack('<I', f[12:16])[0]; j = json.loads(f[20:20 + n]); binc = f[20 + n + 8:]
-CT = {5120: 'i1', 5121: 'u1', 5122: '<i2', 5123: '<u2', 5125: '<u4', 5126: '<f4'}; NC = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4}
-def acc(i):
-    a = j['accessors'][i]; bv = j['bufferViews'][a['bufferView']]; dt = np.dtype(CT[a['componentType']]); k = NC[a['type']]
-    off = bv.get('byteOffset', 0) + a.get('byteOffset', 0); st = bv.get('byteStride') or dt.itemsize * k
-    raw = np.frombuffer(binc, np.uint8, st * (a['count'] - 1) + dt.itemsize * k, off)
-    return np.lib.stride_tricks.as_strided(raw, (a['count'], dt.itemsize * k), (st, 1)).copy().view(dt).reshape(a['count'], k)
-p = j['meshes'][0]['primitives'][0]
-pos = acc(p['attributes']['POSITION']).astype(np.float32); nor = acc(p['attributes']['NORMAL']).astype(np.float32); uv = acc(p['attributes']['TEXCOORD_0']).astype(np.float32)
-idx = acc(p['indices']).astype(np.uint32).ravel()
-# pieds au sol, centré, hauteur 1 : le jeu règle la taille
-pos[:, 1] -= pos[:, 1].min(); pos[:, 0] -= (pos[:, 0].min() + pos[:, 0].max()) / 2; pos[:, 2] -= (pos[:, 2].min() + pos[:, 2].max()) / 2; pos /= pos[:, 1].max()
-with tempfile.TemporaryDirectory() as t:
-    json.dump({'pos': pos.ravel().tolist(), 'idx': idx.tolist()}, open(t + '/a.json', 'w'))
-    print(subprocess.run(['node', os.path.join(racine, 'outils/simplifier.js'), t + '/a.json', t + '/b.json', sys.argv[3] if len(sys.argv) > 3 else '420'], capture_output=True, text=True, check=True).stdout.strip())
-    low = np.array(json.load(open(t + '/b.json')), np.uint32)
-used = np.unique(low); remap = np.zeros(len(pos), np.uint32); remap[used] = np.arange(len(used))
-b64 = lambda a: base64.b64encode(a.tobytes()).decode()
-def pack(P, N, U, I): return {'n': len(P), 'pos': b64(P.astype('<f4')), 'nor': b64(np.clip(np.round(N * 127), -127, 127).astype('i1')), 'uv': b64(U.astype('<f4')), 'idx': b64(I.astype('<u2'))}
-im = j['images'][0]; bv = j['bufferViews'][im['bufferView']]
-img = Image.open(io.BytesIO(binc[bv.get('byteOffset', 0):bv.get('byteOffset', 0) + bv['byteLength']])).convert('RGB'); print('texture', img.size)
-img = img.resize((1024, 1024), Image.LANCZOS); buf = io.BytesIO(); img.save(buf, 'JPEG', quality=86)
-out = {'pres': pack(pos, nor, uv, idx), 'loin': pack(pos[used], nor[used], uv[used], remap[low]), 'tex': 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()}
+ap = argparse.ArgumentParser(); ap.add_argument('src'); ap.add_argument('nom'); ap.add_argument('--fusil'); a = ap.parse_args()
+# nom dans le jeu : (mot cherché dans le nom du clip, images par seconde)
+CLIPS = {'marche': ('walking', 24), 'course': ('running', 24), 'attente': ('idle', 10), 'tir': ('shooting', 20)}
+
+b64 = lambda x: base64.b64encode(x.tobytes()).decode()
+def alleger(pos, idx, cible, approx=False):
+    with tempfile.TemporaryDirectory() as t:
+        json.dump({'pos': pos.ravel().tolist(), 'idx': idx.tolist()}, open(t + '/a.json', 'w'))
+        print('  ', subprocess.run(['node', os.path.join(racine, 'outils/simplifier.js'), t + '/a.json', t + '/b.json', str(cible)] + (['approx'] if approx else []), capture_output=True, text=True, check=True).stdout.strip())
+        return np.array(json.load(open(t + '/b.json')), np.uint32)
+def paquet(m, idx):
+    used = np.unique(idx); remap = np.zeros(len(m['pos']), np.uint32); remap[used] = np.arange(len(used))
+    return {'n': len(used), 'pos': b64(m['pos'][used].astype('<f4')), 'nor': b64(np.clip(np.round(m['nor'][used] * 127), -127, 127).astype('i1')), 'uv': b64(m['uv'][used].astype('<f4')),
+            'os': b64(m['os'][used].astype('u1')), 'poids': b64(np.clip(np.round(m['poids'][used] * 255), 0, 255).astype('u1')), 'idx': b64(remap[idx].astype('<u2')), 'tri': len(idx) // 3}
+def texture(g, cote):
+    buf = io.BytesIO(); g.image().resize((cote, cote)).save(buf, 'JPEG', quality=86); return 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
+
+g = Glb(a.src); m = g.maillage(); sq = Squelette(g); noms = [sq.nom(k) for k in range(len(sq.os))]
+haut = float(m['pos'][:, 1].max()); print('soldat :', len(m['pos']), 'sommets,', len(m['idx']) // 3, 'triangles, hauteur', round(haut, 3), ',', len(noms), 'os')
+out = {'pres': paquet(m, m['idx']), 'loin': paquet(m, alleger(m['pos'], m['idx'], 420)), 'tex': texture(g, 1024)}
+
+# animations : le jeu veut un soldat de hauteur 1, pieds au sol, qui regarde vers -z
+N = np.diag([-1 / haut, 1 / haut, -1 / haut, 1.0]); lignes = []; clips = {}
+for nom, (mot, ips) in CLIPS.items():
+    c = next((k for k in sq.clips if mot in k.lower()), None)
+    if not c: print('  animation absente :', nom); continue
+    d = sq.duree(c); n = max(2, int(round(d * ips))); clips[nom] = [len(lignes), n, n / d]
+    for i in range(n): lignes.append((N @ sq.pose(c, d * i / n)[0])[:, :3, :])
+    print('  animation', nom, '<-', c, ':', n, 'images')
+T = np.stack(lignes).astype(np.float16) # images x os x 3 lignes x 4
+out['anim'] = {'os': len(noms), 'images': len(lignes), 'clips': clips, 'table': b64(T)}
+
+if a.fusil:
+    f = Glb(a.fusil).maillage(); p = f['pos'].astype(np.float64); L = np.ptp(p[:, 0]); k = 1.9 / L # 1,52 m de fusil et sa baïonnette
+    ih = noms.index('mixamorig:RightHand'); G = sq.pose()[1]; main = G[ih][:3, 3]; bras = main - G[noms.index('mixamorig:RightForeArm')][:3, 3]; prise = main + bras / np.linalg.norm(bras) * 0.08
+    R = np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]], float) # bouche du canon (-x du modèle) vers l'avant du soldat (+z)
+    s, c = np.sin(np.radians(12)), np.cos(np.radians(12)); Tl = np.array([[1, 0, 0], [0, c, s], [0, -s, c]]) # bouche un peu relevée
+    centre = np.array([0.10 * L / 0.96, 0, 0]) # point tenu : un peu en arrière du milieu
+    f['pos'] = (((p - centre) * k) @ R.T @ Tl.T + prise).astype(np.float32); f['nor'] = (f['nor'].astype(np.float64) @ R.T @ Tl.T).astype(np.float32)
+    f['os'] = np.zeros((len(p), 4), np.uint8); f['os'][:, 0] = ih; f['poids'] = np.zeros((len(p), 4), np.float32); f['poids'][:, 0] = 1
+    print('fusil :', len(p), 'sommets,', len(f['idx']) // 3, 'triangles')
+    out['fusil'] = {'pres': paquet(f, alleger(f['pos'], f['idx'], 400, True)), 'loin': paquet(f, alleger(f['pos'], f['idx'], 60, True)), 'tex': texture(Glb(a.fusil), 256)}
 os.makedirs(os.path.join(racine, 'src/modeles'), exist_ok=True)
-open(os.path.join(racine, f'src/modeles/{nom}.js'), 'w').write('export default ' + json.dumps(out) + ';\n')
-print('sommets', len(pos), 'allégé', len(used), 'largeur', np.ptp(pos[:, 0]).round(2), 'épaisseur', np.ptp(pos[:, 2]).round(2), 'texture Ko', len(buf.getvalue()) // 1024)
-img.resize((512,512)).save('/home/claude/tex.png')
+ch = os.path.join(racine, f'src/modeles/{a.nom}.js'); open(ch, 'w').write('export default ' + json.dumps(out) + ';\n'); print('écrit', ch, os.path.getsize(ch) // 1024, 'Ko')

@@ -32,11 +32,18 @@ const sun = new THREE.DirectionalLight(0xffe2b0, 2.1); sun.position.set(0.75, 0.
 
 /* brume de fond de vallée : même réglage pour le sol et les soldats */
 const mist = { uMist: { value: 0.85 }, uTop: { value: (232 - H0) * VE }, uBot: { value: (198 - H0) * VE }, uMistCol: { value: new THREE.Color(0xe6ecf0) } };
-function withMist(mat) {
+function withMist(mat, anim) { // anim : le soldat est animé par la carte graphique, à partir de la table des os
+  mat.customProgramCacheKey = () => anim ? 'anime' : 'fixe';
   mat.onBeforeCompile = sh => {
-    Object.assign(sh.uniforms, mist);
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWY;')
+    Object.assign(sh.uniforms, mist, anim || {});
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWY;' + (anim ? `
+attribute vec4 aJ; attribute vec4 aW; attribute float aRow; uniform sampler2D uOs; uniform float uHaut;
+mat4 osM(float j){ int x=int(j+0.5)*3, y=int(aRow+0.5); vec4 a=texelFetch(uOs,ivec2(x,y),0), b=texelFetch(uOs,ivec2(x+1,y),0), c=texelFetch(uOs,ivec2(x+2,y),0);
+  return mat4(a.x,b.x,c.x,0., a.y,b.y,c.y,0., a.z,b.z,c.z,0., a.w,b.w,c.w,1.); }` : ''))
       .replace('#include <project_vertex>', '#include <project_vertex>\nvec4 wpM=vec4(transformed,1.0);\n#ifdef USE_INSTANCING\nwpM=instanceMatrix*wpM;\n#endif\nwpM=modelMatrix*wpM;vWY=wpM.y;');
+    if (anim) sh.vertexShader = sh.vertexShader
+      .replace('#include <beginnormal_vertex>', 'mat4 sk=(aW.x*osM(aJ.x)+aW.y*osM(aJ.y)+aW.z*osM(aJ.z)+aW.w*osM(aJ.w))/(aW.x+aW.y+aW.z+aW.w);\n#include <beginnormal_vertex>\nobjectNormal=mat3(sk)*objectNormal;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed=(sk*vec4(transformed,1.0)).xyz*uHaut;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWY;uniform float uMist,uTop,uBot;uniform vec3 uMistCol;')
       .replace('#include <fog_fragment>', '#include <fog_fragment>\ngl_FragColor.rgb=mix(gl_FragColor.rgb,uMistCol,uMist*smoothstep(uTop,uBot,vWY)*clamp(vFogDepth/900.0,0.12,1.0));');
   };
@@ -99,7 +106,7 @@ const CAMPS = {
 };
 const regs = [];
 let FIGS = 120;
-function addReg(camp, nom, lat, lon, face) { const [x, z] = ll(lat, lon); regs.push({ camp, nom, x, z, face, tx: x, tz: z, tface: face, form: 'colonne', sel: false, moving: false, n: 0, moral: 100, etat: 'ok', recharge: 0, sousFeu: 99, acc: 0 }); }
+function addReg(camp, nom, lat, lon, face, type) { const [x, z] = ll(lat, lon); regs.push({ camp, nom, x, z, face, type: type || 'inf', deploi: 0, tirT: 0, max: 0, tx: x, tz: z, tface: face, form: 'colonne', sel: false, moving: false, n: 0, moral: 100, etat: 'ok', recharge: 0, sousFeu: 99, acc: 0 }); }
 /* Ordre de bataille provisoire, à vérifier sur sources.
    France : IVe corps (Soult), divisions Saint-Hilaire et Vandamme, au pied du plateau le long du Goldbach. */
 const E = Math.PI / 2; // face à l'est
@@ -110,45 +117,75 @@ const SO = -Math.PI * 0.75;
 ['Novgorod', 'Apchéron', 'Petite-Russie', 'Smolensk'].forEach((n, i) => { for (let k = 0; k < 3; k++) addReg('ru', `Régiment de ${n}, ${k + 1}${k ? 'e' : 'er'} bataillon`, 49.1385 + i * 0.0020 + k * 0.0011, 16.7700 + i * 0.0030 + k * 0.0017, SO); });
 ['IR 23 Salzbourg', 'IR 20 Kaunitz', 'IR 24 Auersperg', 'IR 1 Kaiser', 'IR 9 Czartoryski', 'IR 55 Reuss-Greitz'].forEach((n, i) => { for (let k = 0; k < 2; k++) addReg('au', `${n}, ${k + 1}${k ? 'e' : 'er'} bataillon`, 49.1440 + i * 0.0012 + k * 0.0011, 16.7850 + i * 0.0026 + k * 0.0017, SO); });
 
+/* Artillerie, provisoire elle aussi : quatre pièces par batterie. */
+addReg('fr', 'Artillerie à pied, batterie de 8 (Saint-Hilaire)', 49.1420, 16.7425, E, 'art'); addReg('fr', 'Artillerie à pied, batterie de 8 (Vandamme)', 49.1522, 16.7470, E, 'art');
+addReg('ru', 'Batterie russe de 6 livres', 49.1372, 16.7722, SO, 'art'); addReg('ru', 'Batterie russe de 12 livres', 49.1432, 16.7790, SO, 'art'); addReg('au', 'Batterie autrichienne de 6 livres', 49.1452, 16.7838, SO, 'art');
+const PIECES = 4, SERVANTS = 6, ECART_PIECES = 14;
+
 /* modèles Meshy préparés par outils/convertir_modele.py : un maillage détaillé de près, un allégé de loin */
 const HAUT = 1.8 * SC, LOD_DIST = 260;
+const bin = (t, T) => { const b = atob(t), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new T(u.buffer); };
 function geoModele(d) {
-  const bin = (t, T) => { const b = atob(t), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new T(u.buffer); };
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(bin(d.pos, Float32Array), 3));
   g.setAttribute('normal', new THREE.BufferAttribute(bin(d.nor, Int8Array), 3, true));
   g.setAttribute('uv', new THREE.BufferAttribute(bin(d.uv, Float32Array), 2));
-  g.setIndex(new THREE.BufferAttribute(bin(d.idx, Uint16Array), 1));
-  g.scale(HAUT, HAUT, HAUT); g.rotateY(MODELE_DEMI_TOUR ? Math.PI : 0); return g;
+  g.setAttribute('aJ', new THREE.BufferAttribute(bin(d.os, Uint8Array), 4));        // les os qui tirent ce sommet
+  g.setAttribute('aW', new THREE.BufferAttribute(bin(d.poids, Uint8Array), 4, true)); // et leur poids
+  g.setIndex(new THREE.BufferAttribute(bin(d.idx, Uint16Array), 1)); return g;
 }
-const MODELE_DEMI_TOUR = true; // les modèles regardent vers +z, le jeu fait avancer vers -z
-function matModele(d) { const t = new THREE.TextureLoader().load(d.tex); t.flipY = false; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return withMist(new THREE.MeshLambertMaterial({ map: t, side: THREE.DoubleSide })); }
-const MODELES = { fr: { pres: geoModele(FR.pres), loin: geoModele(FR.loin), mat: matModele(FR) } }; // les autres camps gardent la figurine provisoire
+function modele(D) { // soldat animé : corps et fusil partagent le même squelette, le fusil suit la main droite
+  const a = D.anim, table = new THREE.DataTexture(bin(a.table, Uint16Array), a.os * 3, a.images, THREE.RGBAFormat, THREE.HalfFloatType); table.needsUpdate = true;
+  const un = { uOs: { value: table }, uHaut: { value: HAUT } };
+  const mat = d => { const t = new THREE.TextureLoader().load(d.tex); t.flipY = false; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return withMist(new THREE.MeshLambertMaterial({ map: t, side: THREE.DoubleSide }), un); };
+  const m = { clips: a.clips, pres: [geoModele(D.pres)], loin: [geoModele(D.loin)], mats: [mat(D)] };
+  if (D.fusil) { m.pres.push(geoModele(D.fusil.pres)); m.loin.push(geoModele(D.fusil.loin)); m.mats.push(mat(D.fusil)); }
+  return m;
+}
+const MODELES = { fr: modele(FR) }; // les autres camps gardent la figurine provisoire
 
 let sold, pools = [], provisoire; // sold : x, z, décalage de pas par figurine
 const matCoat = withMist(new THREE.MeshLambertMaterial({ vertexColors: true })), matRest = withMist(new THREE.MeshLambertMaterial({ vertexColors: true }));
+const POSTES = [[-1.3, 1.6], [1.3, 1.6], [-1.6, 3.2], [1.6, 3.2], [0, 4.8], [0.6, 7]]; // servants autour de leur pièce
 function slot(r, k, out) { // place de la figurine k dans la formation, repère du bataillon (x : front, z : profondeur)
+  if (r.type === 'art') { const p = POSTES[Math.floor(k / PIECES) % SERVANTS]; out[0] = ((k % PIECES) - (PIECES - 1) / 2) * ECART_PIECES + p[0]; out[1] = p[1]; return; }
   const cols = r.form === 'ligne' ? Math.ceil(FIGS / 3) : 12, rows = Math.ceil(FIGS / cols);
   const sx = r.form === 'ligne' ? 1.6 : 1.5, sz = r.form === 'ligne' ? 1.9 : 2.4;
   out[0] = ((k % cols) - (cols - 1) / 2) * sx; out[1] = (Math.floor(k / cols) - (rows - 1) / 2) * sz;
 }
-function pool(meshes) { meshes.forEach(m => { m.frustumCulled = false; m.instanceMatrix = meshes[0].instanceMatrix; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(m); }); const p = { meshes, M: meshes[0].instanceMatrix.array, n: 0 }; pools.push(p); return p; }
+function pool(meshes, lignes) { // lignes : numéro d'image d'animation par figurine, partagé entre corps et fusil
+  meshes.forEach(m => { m.frustumCulled = false; m.instanceMatrix = meshes[0].instanceMatrix; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); if (lignes) m.geometry.setAttribute('aRow', lignes); scene.add(m); });
+  const p = { meshes, M: meshes[0].instanceMatrix.array, R: lignes, n: 0 }; pools.push(p); return p;
+}
+const ligneAnim = n => { const a = new THREE.InstancedBufferAttribute(new Float32Array(n), 1); a.setUsage(THREE.DynamicDrawUsage); return a; };
 function build() {
   pools.forEach(p => p.meshes.forEach(m => { scene.remove(m); m.dispose(); })); pools = [];
   const N = regs.length * FIGS; sold = new Float32Array(N * 3);
   for (const camp in MODELES) { const m = MODELES[camp], n = regs.filter(r => r.camp === camp).length * FIGS;
-    m.pPres = pool([new THREE.InstancedMesh(m.pres, m.mat, n)]); m.pLoin = pool([new THREE.InstancedMesh(m.loin, m.mat, n)]); }
+    m.pPres = pool(m.pres.map((g, i) => new THREE.InstancedMesh(g, m.mats[i], n)), ligneAnim(n)); m.pLoin = pool(m.loin.map((g, i) => new THREE.InstancedMesh(g, m.mats[i], n)), ligneAnim(n)); }
   const nP = regs.filter(r => !MODELES[r.camp]).length * FIGS, coat = new THREE.InstancedMesh(gCoat, matCoat, nP), c = new THREE.Color(); let q = 0;
   provisoire = pool([coat, new THREE.InstancedMesh(gRest, matRest, nP)]);
   regs.forEach((r, ri) => { for (let k = 0; k < FIGS; k++) { const i = ri * FIGS + k;
     sold[i * 3] = r.x; sold[i * 3 + 1] = r.z; sold[i * 3 + 2] = rnd(i, 7) * 6.28;
     if (!MODELES[r.camp]) { c.setHex(CAMPS[r.camp].coul).multiplyScalar(0.85 + rnd(i, 3) * 0.3); coat.setColorAt(q++, c); } } r.snap = true;
-    Object.assign(r, { n: FIGS, moral: 100, etat: 'ok', recharge: rnd(ri, 1) * 20, sousFeu: 99, acc: 0, moving: false, tx: r.x, tz: r.z }); r.flag.children[1].material.color.setHex(CAMPS[r.camp].coul); r.flag.visible = true; });
+    r.max = r.type === 'art' ? Math.min(FIGS, PIECES * SERVANTS) : FIGS;
+    Object.assign(r, { n: r.max, deploi: 0, tirT: 0, moral: 100, etat: 'ok', recharge: rnd(ri, 1) * 20, sousFeu: 99, acc: 0, moving: false, tx: r.x, tz: r.z }); r.flag.children[1].material.color.setHex(CAMPS[r.camp].coul); r.flag.visible = true; });
   mortsInit();
-  document.getElementById('nb').textContent = N.toLocaleString('fr-FR');
+  canonsInit();
+  document.getElementById('nb').textContent = regs.reduce((a, r) => a + r.max, 0).toLocaleString('fr-FR');
 }
 /* repère du bataillon -> carte : l'avant regarde (sin f, -cos f), la droite est (cos f, sin f) */
 function toWorld(r, lx, lz, out) { const cs = Math.cos(r.face), sn = Math.sin(r.face); out[0] = r.x + lx * cs - lz * sn; out[1] = r.z + lx * sn + lz * cs; }
+
+/* canons provisoires dessinés en code, en attendant le modèle */
+const gCanon = (() => { const P = [], col = (g, c) => { const k = new THREE.Color(c), n = g.attributes.position.count, a = new Float32Array(n * 3); for (let i = 0; i < n; i++) { a[i * 3] = k.r; a[i * 3 + 1] = k.g; a[i * 3 + 2] = k.b; } g.setAttribute('color', new THREE.BufferAttribute(a, 3)); return g.toNonIndexed(); };
+  const tube = new THREE.CylinderGeometry(0.11, 0.16, 2.3, 10); tube.rotateX(-Math.PI / 2); tube.rotateX(0.06); tube.translate(0, 1.15, -0.5); P.push(col(tube, 0xb08a3c));
+  for (const sx of [-0.8, 0.8]) { const roue = new THREE.CylinderGeometry(0.72, 0.72, 0.1, 14); roue.rotateZ(Math.PI / 2); roue.translate(sx, 0.72, 0); P.push(col(roue, 0x4d5a36)); }
+  const essieu = new THREE.BoxGeometry(1.6, 0.14, 0.14); essieu.translate(0, 0.72, 0); P.push(col(essieu, 0x3c4630));
+  const fleche = new THREE.BoxGeometry(0.3, 0.22, 2.9); fleche.rotateX(-0.22); fleche.translate(0, 0.5, 1.3); P.push(col(fleche, 0x4d5a36));
+  const g = mergeGeometries(P); g.scale(SC, SC, SC); return g; })();
+const matCanon = withMist(new THREE.MeshLambertMaterial({ vertexColors: true })); let canons = null;
+function canonsInit() { if (canons) { scene.remove(canons); canons.dispose(); } const B = regs.filter(r => r.type === 'art'); canons = new THREE.InstancedMesh(gCanon, matCanon, B.length * PIECES); canons.frustumCulled = false; scene.add(canons); B.forEach((r, i) => r.canon0 = i * PIECES); }
 
 /* drapeaux et anneaux de sélection */
 const flagG = new THREE.PlaneGeometry(9, 6); flagG.translate(4.5, 13, 0);
@@ -217,17 +254,19 @@ function order(p) { // marche vers le point : le groupe garde un front perpendic
   const f = Math.atan2(p.x - cx, -(p.z - cz)), rx = Math.cos(f), rz = Math.sin(f), fwx = Math.sin(f), fwz = -Math.cos(f);
   S.sort((a, b) => ((a.x - cx) * rx + (a.z - cz) * rz) - ((b.x - cx) * rx + (b.z - cz) * rz));
   const perRow = Math.min(S.length, 6);
-  S.forEach((r, i) => { const w = r.form === 'ligne' ? FIGS / 3 * 1.6 + 25 : 45, row = Math.floor(i / perRow), k = i % perRow, n = Math.min(perRow, S.length - row * perRow);
+  S.forEach((r, i) => { const w = r.type === 'art' ? 80 : r.form === 'ligne' ? FIGS / 3 * 1.6 + 25 : 45, row = Math.floor(i / perRow), k = i % perRow, n = Math.min(perRow, S.length - row * perRow);
     const off = (k - (n - 1) / 2) * w; r.tx = p.x + rx * off - fwx * row * 70; r.tz = p.z + rz * off - fwz * row * 70; r.tface = f; r.moving = true;
     r.tx = Math.max(-WX / 2 + 50, Math.min(WX / 2 - 50, r.tx)); r.tz = Math.max(-WZ / 2 + 50, Math.min(WZ / 2 - 50, r.tz)); });
 }
-function setForm(f) { regs.forEach(r => { if (r.sel && commandable(r)) r.form = f; }); hud(); }
+function setForm(f) { regs.forEach(r => { if (r.sel && commandable(r) && r.type !== 'art') r.form = f; }); hud(); }
 let speed = 1; function setSpeed(s) { speed = s; document.querySelectorAll('[data-v]').forEach(b => b.classList.toggle('on', +b.dataset.v === s)); }
 
 /* ===== SIMULATION : on déplace le bataillon, les figurines rejoignent leur place ===== */
 /* ===== COMBAT : feu de salve, pertes, moral, déroute =====
-   Une figurine vaut HOMMES soldats. Réglages regroupés ici pour l'équilibrage. */
-const HOMMES = 5, PORTEE = 160, RECHARGE = 20, ARC = 0.7, CONTACT = 28;
+   Réglages regroupés ici pour l'équilibrage. */
+const PORTEE = 160, RECHARGE = 20, ARC = 0.7, CONTACT = 28;
+const PORTEE_ART = 900, MITRAILLE = 250, RECHARGE_ART = 30, ARC_ART = 0.45, MISE_EN_BATTERIE = 40, PIVOT = 12;
+const hommes = r => Math.round(r.n / (r.max || 1) * (r.type === 'art' ? 100 : 600)); // un bataillon : 600 hommes, une batterie : 100
 let iaAllies = true;
 const ennemis = (a, b) => (a.camp === 'fr') !== (b.camp === 'fr');
 const commandable = r => r.n > 0 && r.etat === 'ok' && !(iaAllies && r.camp !== 'fr');
@@ -251,7 +290,7 @@ let morts = [];
 function mortsInit() {
   morts.forEach(m => { scene.remove(m.mesh); m.mesh.dispose(); }); morts = [];
   const mk = (geo, mat, n, test) => { const mesh = new THREE.InstancedMesh(geo, mat, n); mesh.count = 0; mesh.frustumCulled = false; scene.add(mesh); morts.push({ mesh, test, max: n }); };
-  for (const camp in MODELES) mk(MODELES[camp].loin, MODELES[camp].mat, regs.filter(r => r.camp === camp).length * FIGS, r => r.camp === camp);
+  for (const camp in MODELES) { const m = MODELES[camp], n = regs.filter(r => r.camp === camp).length * FIGS, g = m.loin[0].clone(), l = ligneAnim(n); l.array.fill(m.clips.attente[0]); g.setAttribute('aRow', l); mk(g, m.mats[0], n, r => r.camp === camp); }
   mk(gCoat, matCoat, regs.filter(r => !MODELES[r.camp]).length * FIGS, r => !MODELES[r.camp]);
 }
 const mM = new THREE.Matrix4(), mQ = new THREE.Quaternion(), mE = new THREE.Euler(), mV = new THREE.Vector3(), mS = new THREE.Vector3(1, 1, 1), mC = new THREE.Color();
@@ -259,41 +298,62 @@ function tombe(r, x, z) { const p = morts.find(m => m.test(r)); if (!p || p.mesh
   mE.set(-Math.PI / 2, Math.random() * 6.28, 0, 'YXZ'); mQ.setFromEuler(mE); mV.set(x, yAt(x, z) + 0.3, z); mM.compose(mV, mQ, mS);
   const i = p.mesh.count++; p.mesh.setMatrixAt(i, mM); if (!MODELES[r.camp]) { p.mesh.setColorAt(i, mC.setHex(CAMPS[r.camp].coul)); p.mesh.instanceColor.needsUpdate = true; } p.mesh.instanceMatrix.needsUpdate = true; }
 
+function pertes(e, attendu, tireur, coefMoral) { // retire des figurines, laisse les morts, entame le moral
+  e.acc += attendu * (0.6 + Math.random() * 0.8); const tues = Math.min(e.n, Math.floor(e.acc)); e.acc -= tues;
+  for (let k = 0; k < tues; k++) { const i = regs.indexOf(e) * FIGS + (--e.n); tombe(e, sold[i * 3], sold[i * 3 + 1]); }
+  const flanc = Math.abs(ecart(cap(e, tireur), e.face)) > 1.05;         // pris de flanc ou à revers : le moral souffre double
+  e.moral -= (tues / e.max * 100 * 1.6 + 1.2) * (flanc ? 2 : 1) * coefMoral; e.sousFeu = 0; return flanc;
+}
 function salve(r, e, d) {
   const tireurs = r.form === 'ligne' ? r.n * 0.85 : Math.min(r.n, 24); // en colonne, seuls les premiers rangs tirent
   let p = 0.05 - (0.05 - 0.008) * Math.min(1, Math.max(0, (d - 30) / (PORTEE - 30)));
-  if (e.form === 'colonne') p *= 1.4;                                   // cible dense
+  if (e.form === 'colonne' && e.type !== 'art') p *= 1.4;               // cible dense
+  if (e.type === 'art') p *= 0.25;                                      // servants dispersés autour des pièces
   if (mist.uMist.value && altAt(e.x, e.z) < 215) p *= 0.5;              // cible dans la brume
   if (altAt(r.x, r.z) - altAt(e.x, e.z) > 4) p *= 1.15;                 // tir depuis la hauteur
-  e.acc += tireurs * p * (0.6 + Math.random() * 0.8); const tues = Math.min(e.n, Math.floor(e.acc)); e.acc -= tues;
-  for (let k = 0; k < tues; k++) { const i = regs.indexOf(e) * FIGS + (--e.n); tombe(e, sold[i * 3], sold[i * 3 + 1]); }
-  const flanc = Math.abs(ecart(cap(e, r), e.face)) > 1.05;              // pris de flanc ou à revers : le moral souffre double
-  e.moral -= (tues / FIGS * 100 * 1.6 + 1.2) * (flanc ? 2 : 1); e.sousFeu = 0;
+  pertes(e, tireurs * p, r, 1);
   const cs = Math.cos(r.face), sn = Math.sin(r.face), w = r.form === 'ligne' ? FIGS / 3 * 1.6 : 18;
   for (let k = 0; k < 14; k++) { const lx = (Math.random() - 0.5) * w, x = r.x + lx * cs + sn * 6, z = r.z + lx * sn - cs * 6; bouffee(x, yAt(x, z) + 2.5 + Math.random() * 2, z); }
-  r.recharge = RECHARGE * (0.9 + Math.random() * 0.3);
+  r.recharge = RECHARGE * (0.9 + Math.random() * 0.3); r.tirT = 3;
+}
+/* artillerie : boulet de loin, mitraille de près ; il faut voir la cible, donc les crêtes et les contre-pentes comptent */
+function enVue(r, e) { const a0 = altAt(r.x, r.z) + 2, a1 = altAt(e.x, e.z) + 2; for (let k = 1; k < 16; k++) { const t = k / 16; if (altAt(r.x + (e.x - r.x) * t, r.z + (e.z - r.z) * t) > a0 + (a1 - a0) * t) return false; } return true; }
+function canonnade(r, e, d) {
+  const pieces = Math.ceil(r.n / SERVANTS), mitraille = d < MITRAILLE; // une pièce sans servants se tait
+  let parPiece = mitraille ? 0.7 + 1.1 * (1 - d / MITRAILLE) : 0.45 * (1 - 0.65 * (d - MITRAILLE) / (PORTEE_ART - MITRAILLE));
+  if (e.type === 'art') parPiece *= 0.3; else { parPiece *= e.max / 120; if (!mitraille && e.form === 'colonne') parPiece *= 2.2; } // le boulet traverse une colonne dans sa profondeur
+  if (mist.uMist.value && altAt(e.x, e.z) < 215) parPiece *= 0.5;
+  const flanc = pertes(e, pieces * parPiece, r, 1.5);
+  if (flanc && !mitraille && e.type !== 'art' && e.form === 'ligne') pertes(e, pieces * parPiece, r, 0); // enfilade : le boulet prend la ligne dans sa longueur
+  const cs = Math.cos(r.face), sn = Math.sin(r.face);
+  for (let g = 0; g < pieces; g++) for (let k = 0; k < 9; k++) { const lx = (g - (PIECES - 1) / 2) * ECART_PIECES + (Math.random() - 0.5) * 4, av = 4 + Math.random() * 9, x = r.x + lx * cs + sn * av, z = r.z + lx * sn - cs * av; bouffee(x, yAt(x, z) + 2 + Math.random() * 4, z); }
+  r.recharge = RECHARGE_ART * (0.9 + Math.random() * 0.25); r.mitraille = mitraille;
 }
 function combat(r, dt) {
-  let e = null, d = 1e9; for (const o of regs) if (o.n > 0 && ennemis(r, o)) { const q = Math.hypot(o.x - r.x, o.z - r.z); if (q < d && (o.etat === 'ok' || q < PORTEE)) { d = q; e = o; } }
-  r.ennemi = e; r.dEnn = d; r.recharge -= dt; r.sousFeu += dt;
+  const art = r.type === 'art', portee = art ? PORTEE_ART : PORTEE;
+  let e = null, d = 1e9; for (const o of regs) if (o.n > 0 && ennemis(r, o)) { const q = Math.hypot(o.x - r.x, o.z - r.z); if (q < d && (o.etat === 'ok' || q < portee)) { d = q; e = o; } }
+  r.ennemi = e; r.dEnn = d; r.recharge -= dt; r.sousFeu += dt; r.tirT -= dt;
   if (r.etat === 'deroute') { // fuite, puis ralliement loin de l'ennemi
     if (!r.moving || d < 250) { const a = e ? cap(e, r) : 0; r.tx = Math.max(-WX / 2 + 60, Math.min(WX / 2 - 60, r.x + Math.sin(a) * 500)); r.tz = Math.max(-WZ / 2 + 60, Math.min(WZ / 2 - 60, r.z - Math.cos(a) * 500)); r.moving = true; }
     if (r.sousFeu > 20) r.moral += dt * 0.9;
     if (r.moral > 45 && d > 350) { r.etat = 'ok'; r.moving = false; r.flag.children[1].material.color.setHex(CAMPS[r.camp].coul); }
     return;
   }
-  if (r.sousFeu > 15) r.moral = Math.min(100 * Math.min(1, r.n / FIGS + 0.25), r.moral + dt * 0.35);
-  if (r.n < FIGS * 0.15) { r.n = 0; r.sel = false; r.flag.visible = false; r.ring.visible = false; return; } // bataillon détruit
+  if (r.sousFeu > 15) r.moral = Math.min(100 * Math.min(1, r.n / r.max + 0.25), r.moral + dt * 0.35);
+  if (r.n < r.max * 0.15 || (art && r.moral < 20)) { r.n = 0; r.sel = false; r.flag.visible = false; r.ring.visible = false; return; } // bataillon détruit, ou servants qui abandonnent leurs pièces
   if (r.moral < 20) { r.etat = 'deroute'; r.sel = false; r.form = 'colonne'; r.moving = false; r.flag.children[1].material.color.setHex(0xf2f2f2); return; }
-  if (iaAllies && r.camp !== 'fr' && e && d < 450) { // IA minimale : se mettre en ligne face à la menace
-    r.form = 'ligne'; if (Math.abs(ecart(cap(r, e), r.face)) > 0.25 && !r.moving) { r.tx = r.x; r.tz = r.z; r.tface = cap(r, e); r.moving = true; } }
+  if (iaAllies && r.camp !== 'fr' && e && d < (art ? PORTEE_ART : 450)) { // IA minimale : faire face à la menace
+    if (!art) r.form = 'ligne'; if (Math.abs(ecart(cap(r, e), r.face)) > (art ? 0.3 : 0.25) && !r.moving) { r.tx = r.x; r.tz = r.z; r.tface = cap(r, e); r.moving = true; } }
+  if (art) { if (!r.moving) r.deploi -= dt; r.voit = !!e && d < PORTEE_ART && enVue(r, e);
+    if (r.voit && !r.moving && r.deploi <= 0 && r.recharge <= 0 && Math.abs(ecart(cap(r, e), r.face)) < ARC_ART) canonnade(r, e, d); return; }
   if (e && d < PORTEE && !r.moving && r.recharge <= 0 && Math.abs(ecart(cap(r, e), r.face)) < ARC) salve(r, e, d);
 }
 
 /* ===== SIMULATION : on déplace le bataillon, les figurines rejoignent leur place ===== */
-const tmp = [0, 0];
+const tmp = [0, 0]; let tAnim = 0;
 function sim(dt) {
   const t = performance.now() / 1000; pools.forEach(p => p.n = 0);
+  if (speed > 0) tAnim += dt / speed * Math.min(speed, 2.5); // les jambes ne s'emballent pas en accéléré
   regs.forEach((r, ri) => {
     if (r.n <= 0) return;
     if (dt > 0) combat(r, dt);
@@ -302,7 +362,8 @@ function sim(dt) {
     if (r.moving && dt > 0) {
       const dx = r.tx - r.x, dz = r.tz - r.z, d = Math.hypot(dx, dz);
       const pente = Math.max(0, (altAt(r.x + dx / (d || 1) * 20, r.z + dz / (d || 1) * 20) - altAt(r.x, r.z)) / 20);
-      const v = fuite ? 2.8 : (r.form === 'ligne' ? 1.15 : 1.5) * (1 - Math.min(0.5, pente * 4)); // la ligne marche moins vite, la montée ralentit
+      if (r.type === 'art') r.deploi = d > 1 ? MISE_EN_BATTERIE : Math.max(r.deploi, PIVOT); // bouger oblige à remettre en batterie, pivoter coûte moins
+      const v = fuite ? 2.8 : r.type === 'art' ? 1.2 * (1 - Math.min(0.65, pente * 6)) : (r.form === 'ligne' ? 1.15 : 1.5) * (1 - Math.min(0.5, pente * 4)); // la ligne marche moins vite, la montée ralentit
       const want = d > 15 ? Math.atan2(dx, -dz) : r.tface, da = ecart(want, r.face);
       r.face += Math.sign(da) * Math.min(Math.abs(da), (fuite ? 1.2 : 0.35) * dt);
       const bloque = !fuite && r.ennemi && r.dEnn < CONTACT && Math.abs(ecart(cap(r, r.ennemi), Math.atan2(dx, -dz))) < 1.2; // pas de mêlée pour l'instant : on s'arrête au contact
@@ -316,7 +377,8 @@ function sim(dt) {
       const i = ri * FIGS + k; slot(r, k, tmp); if (fuite) { tmp[0] += (rnd(i, 11) - 0.5) * 9; tmp[1] += (rnd(i, 13) - 0.5) * 9; } toWorld(r, tmp[0], tmp[1], tmp);
       let x = sold[i * 3], z = sold[i * 3 + 1]; const ex = tmp[0] - x, ez = tmp[1] - z, e = Math.hypot(ex, ez); let bob = 0;
       if (r.snap) { x = tmp[0]; z = tmp[1]; }
-      else if (e > 0.05 && dt > 0) { const st = Math.min(e, vmax * (0.8 + rnd(i, 5) * 0.4)); x += ex / e * st; z += ez / e * st; bob = Math.abs(Math.sin(t * 6 * Math.min(speed, 3) + sold[i * 3 + 2])) * 0.12 * SC; }
+      else if (e > 0.05 && dt > 0) { const st = Math.min(e, vmax * (0.8 + rnd(i, 5) * 0.4)); x += ex / e * st; z += ez / e * st; if (!md) bob = Math.abs(Math.sin(t * 6 * Math.min(speed, 3) + sold[i * 3 + 2])) * 0.12 * SC; }
+      if (md) { const c = e > 0.25 ? (fuite ? md.clips.course : md.clips.marche) : r.tirT > 0 && md.clips.tir ? md.clips.tir : md.clips.attente; P.R.array[P.n] = c[0] + Math.floor((tAnim * c[2] + sold[i * 3 + 2] * (c === md.clips.tir ? 1 : 7)) % c[1]); }
       sold[i * 3] = x; sold[i * 3 + 1] = z;
       const o = P.n++ * 16; // rotation autour de la verticale puis position
       M[o] = cs; M[o + 1] = 0; M[o + 2] = sn; M[o + 3] = 0; M[o + 4] = 0; M[o + 5] = 1; M[o + 6] = 0; M[o + 7] = 0;
@@ -324,20 +386,24 @@ function sim(dt) {
     }
     r.snap = false;
     const gy = yAt(r.x, r.z); r.flag.position.set(r.x, gy, r.z); r.flag.rotation.y = -r.face;
-    const rad = r.form === 'ligne' ? FIGS / 3 * 0.8 + 8 : 22; r.ring.visible = r.sel; r.ring.position.set(r.x, gy + 1.5, r.z); r.ring.scale.set(rad, 1, rad);
+    if (r.type === 'art') for (let g = 0; g < PIECES; g++) { toWorld(r, (g - (PIECES - 1) / 2) * ECART_PIECES, 0, tmp); mE.set(0, -r.face, 0); mQ.setFromEuler(mE); mV.set(tmp[0], yAt(tmp[0], tmp[1]), tmp[1]); canons.setMatrixAt(r.canon0 + g, mM.compose(mV, mQ, mS)); }
+    const rad = r.type === 'art' ? 36 : r.form === 'ligne' ? FIGS / 3 * 0.8 + 8 : 22; r.ring.visible = r.sel; r.ring.position.set(r.x, gy + 1.5, r.z); r.ring.scale.set(rad, 1, rad);
   });
-  pools.forEach(p => { p.meshes.forEach(m => m.count = p.n); p.meshes[0].instanceMatrix.needsUpdate = true; });
+  pools.forEach(p => { p.meshes.forEach(m => m.count = p.n); p.meshes[0].instanceMatrix.needsUpdate = true; if (p.R) p.R.needsUpdate = true; });
+  canons.instanceMatrix.needsUpdate = true;
   fumeeMaj(dt);
 }
 
 /* ===== INTERFACE ===== */
 const ETATS = { ok: 'en bon ordre', deroute: 'en déroute' };
+function etatArt(r) { return r.moving ? (Math.hypot(r.tx - r.x, r.tz - r.z) > 1 ? 'attelée, en marche' : 'pivote') : r.deploi > 0 ? `mise en batterie (${Math.ceil(r.deploi)} s)` : !r.ennemi || r.dEnn > PORTEE_ART ? 'en batterie, pas de cible' : !r.voit ? 'en batterie, cible masquée par le relief' : Math.abs(ecart(cap(r, r.ennemi), r.face)) > ARC_ART ? 'en batterie, cible hors de l\'axe' : `tire à ${r.dEnn < MITRAILLE ? 'mitraille' : 'boulet'} à ${Math.round(r.dEnn)} m`; }
 function hud() {
   const S = regs.filter(r => r.sel && r.n > 0), e = document.getElementById('sel');
-  if (!S.length) e.innerHTML = '<i>Aucun bataillon sélectionné</i>';
-  else if (S.length === 1) { const r = S[0]; e.innerHTML = `<b>${r.nom}</b><br>${r.n * HOMMES} hommes · moral ${Math.max(0, Math.round(r.moral))} · en ${r.form} · ${ETATS[r.etat]}${r.dEnn < PORTEE ? ' · ennemi à ' + Math.round(r.dEnn) + ' m' : ''}`; }
-  else e.innerHTML = `<b>${S.length} bataillons</b> · ${S.reduce((a, r) => a + r.n, 0) * HOMMES} hommes · moral moyen ${Math.round(S.reduce((a, r) => a + Math.max(0, r.moral), 0) / S.length)}<br>` + [...new Set(S.map(r => r.nom.split(',')[0]))].slice(0, 6).join(' · ');
-  const tot = f => { const R = regs.filter(f); return `${R.reduce((a, r) => a + r.n, 0) * HOMMES} h. <small>(${R.filter(r => r.n > 0 && r.etat === 'ok').length}/${R.length} bat.)</small>`; };
+  if (!S.length) e.innerHTML = '<i>Aucune unité sélectionnée</i>';
+  else if (S.length === 1) { const r = S[0]; e.innerHTML = r.type === 'art' ? `<b>${r.nom}</b><br>${Math.ceil(r.n / SERVANTS)} pièces · ${hommes(r)} hommes · moral ${Math.max(0, Math.round(r.moral))} · ${etatArt(r)}`
+    : `<b>${r.nom}</b><br>${hommes(r)} hommes · moral ${Math.max(0, Math.round(r.moral))} · en ${r.form} · ${ETATS[r.etat]}${r.dEnn < PORTEE ? ' · ennemi à ' + Math.round(r.dEnn) + ' m' : ''}`; }
+  else e.innerHTML = `<b>${S.length} unités</b> · ${S.reduce((a, r) => a + hommes(r), 0)} hommes · moral moyen ${Math.round(S.reduce((a, r) => a + Math.max(0, r.moral), 0) / S.length)}<br>` + [...new Set(S.map(r => r.nom.split(',')[0]))].slice(0, 6).join(' · ');
+  const tot = f => { const R = regs.filter(f); return `${R.reduce((a, r) => a + hommes(r), 0)} h. <small>(${R.filter(r => r.n > 0 && r.etat === 'ok').length}/${R.length} unités)</small>`; };
   document.getElementById('forces').innerHTML = `France ${tot(r => r.camp === 'fr')}<br>Alliés ${tot(r => r.camp !== 'fr')}`;
 }
 document.getElementById('ligne').onclick = () => setForm('ligne'); document.getElementById('colonne').onclick = () => setForm('colonne');
