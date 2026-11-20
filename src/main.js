@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { HW, HH, H64 } from './heights.js';
+import FR from './modeles/fr.js';
 
 /* ===== TERRAIN : relief réel (tuiles 12/2238/1404 et 12/2239/1404) ===== */
 const TILE = 6403, WX = TILE * 2, WZ = TILE, VE = 2.5, H0 = 180;
@@ -109,23 +110,39 @@ const SO = -Math.PI * 0.75;
 ['Novgorod', 'Apchéron', 'Petite-Russie', 'Smolensk'].forEach((n, i) => { for (let k = 0; k < 3; k++) addReg('ru', `Régiment de ${n}, ${k + 1}${k ? 'e' : 'er'} bataillon`, 49.1385 + i * 0.0020 + k * 0.0011, 16.7700 + i * 0.0030 + k * 0.0017, SO); });
 ['IR 23 Salzbourg', 'IR 20 Kaunitz', 'IR 24 Auersperg', 'IR 1 Kaiser', 'IR 9 Czartoryski', 'IR 55 Reuss-Greitz'].forEach((n, i) => { for (let k = 0; k < 2; k++) addReg('au', `${n}, ${k + 1}${k ? 'e' : 'er'} bataillon`, 49.1440 + i * 0.0012 + k * 0.0011, 16.7850 + i * 0.0026 + k * 0.0017, SO); });
 
-let coat, rest, sold; // sold : x, z, décalage de pas par figurine
+/* modèles Meshy préparés par outils/convertir_modele.py : un maillage détaillé de près, un allégé de loin */
+const HAUT = 1.8 * SC, LOD_DIST = 260;
+function geoModele(d) {
+  const bin = (t, T) => { const b = atob(t), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new T(u.buffer); };
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(bin(d.pos, Float32Array), 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(bin(d.nor, Int8Array), 3, true));
+  g.setAttribute('uv', new THREE.BufferAttribute(bin(d.uv, Float32Array), 2));
+  g.setIndex(new THREE.BufferAttribute(bin(d.idx, Uint16Array), 1));
+  g.scale(HAUT, HAUT, HAUT); g.rotateY(MODELE_DEMI_TOUR ? Math.PI : 0); return g;
+}
+const MODELE_DEMI_TOUR = true; // les modèles regardent vers +z, le jeu fait avancer vers -z
+function matModele(d) { const t = new THREE.TextureLoader().load(d.tex); t.flipY = false; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return withMist(new THREE.MeshLambertMaterial({ map: t, side: THREE.DoubleSide })); }
+const MODELES = { fr: { pres: geoModele(FR.pres), loin: geoModele(FR.loin), mat: matModele(FR) } }; // les autres camps gardent la figurine provisoire
+
+let sold, pools = [], provisoire; // sold : x, z, décalage de pas par figurine
 const matCoat = withMist(new THREE.MeshLambertMaterial({ vertexColors: true })), matRest = withMist(new THREE.MeshLambertMaterial({ vertexColors: true }));
 function slot(r, k, out) { // place de la figurine k dans la formation, repère du bataillon (x : front, z : profondeur)
   const cols = r.form === 'ligne' ? Math.ceil(FIGS / 3) : 12, rows = Math.ceil(FIGS / cols);
   const sx = r.form === 'ligne' ? 1.6 : 1.5, sz = r.form === 'ligne' ? 1.9 : 2.4;
   out[0] = ((k % cols) - (cols - 1) / 2) * sx; out[1] = (Math.floor(k / cols) - (rows - 1) / 2) * sz;
 }
+function pool(meshes) { meshes.forEach(m => { m.frustumCulled = false; m.instanceMatrix = meshes[0].instanceMatrix; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(m); }); const p = { meshes, M: meshes[0].instanceMatrix.array, n: 0 }; pools.push(p); return p; }
 function build() {
-  if (coat) { scene.remove(coat, rest); coat.dispose(); rest.dispose(); }
-  const N = regs.length * FIGS;
-  coat = new THREE.InstancedMesh(gCoat, matCoat, N); rest = new THREE.InstancedMesh(gRest, matRest, N);
-  coat.frustumCulled = rest.frustumCulled = false; rest.instanceMatrix = coat.instanceMatrix; // mêmes positions pour les deux
-  sold = new Float32Array(N * 3); const c = new THREE.Color(), s = [0, 0];
-  regs.forEach((r, ri) => { for (let k = 0; k < FIGS; k++) { const i = ri * FIGS + k; slot(r, k, s);
+  pools.forEach(p => p.meshes.forEach(m => { scene.remove(m); m.dispose(); })); pools = [];
+  const N = regs.length * FIGS; sold = new Float32Array(N * 3);
+  for (const camp in MODELES) { const m = MODELES[camp], n = regs.filter(r => r.camp === camp).length * FIGS;
+    m.pPres = pool([new THREE.InstancedMesh(m.pres, m.mat, n)]); m.pLoin = pool([new THREE.InstancedMesh(m.loin, m.mat, n)]); }
+  const nP = regs.filter(r => !MODELES[r.camp]).length * FIGS, coat = new THREE.InstancedMesh(gCoat, matCoat, nP), c = new THREE.Color(); let q = 0;
+  provisoire = pool([coat, new THREE.InstancedMesh(gRest, matRest, nP)]);
+  regs.forEach((r, ri) => { for (let k = 0; k < FIGS; k++) { const i = ri * FIGS + k;
     sold[i * 3] = r.x; sold[i * 3 + 1] = r.z; sold[i * 3 + 2] = rnd(i, 7) * 6.28;
-    c.setHex(CAMPS[r.camp].coul).multiplyScalar(0.85 + rnd(i, 3) * 0.3); coat.setColorAt(i, c); } r.snap = true; });
-  scene.add(coat, rest);
+    if (!MODELES[r.camp]) { c.setHex(CAMPS[r.camp].coul).multiplyScalar(0.85 + rnd(i, 3) * 0.3); coat.setColorAt(q++, c); } } r.snap = true; });
   document.getElementById('nb').textContent = N.toLocaleString('fr-FR');
 }
 /* repère du bataillon -> carte : l'avant regarde (sin f, -cos f), la droite est (cos f, sin f) */
@@ -208,7 +225,7 @@ let speed = 1; function setSpeed(s) { speed = s; document.querySelectorAll('[dat
 /* ===== SIMULATION : on déplace le bataillon, les figurines rejoignent leur place ===== */
 const tmp = [0, 0];
 function sim(dt) {
-  const t = performance.now() / 1000, M = coat.instanceMatrix.array;
+  const t = performance.now() / 1000; pools.forEach(p => p.n = 0);
   regs.forEach((r, ri) => {
     if (r.moving && dt > 0) {
       const dx = r.tx - r.x, dz = r.tz - r.z, d = Math.hypot(dx, dz);
@@ -219,14 +236,15 @@ function sim(dt) {
       if (d > 0.5) { const st = Math.min(d, v * dt * (Math.abs(da) > 0.6 ? 0.3 : 1)); r.x += dx / d * st; r.z += dz / d * st; }
       else if (Math.abs(da) < 0.01) r.moving = false;
     }
-    const cs = Math.cos(r.face), sn = Math.sin(r.face), vmax = 2.6 * dt;
+    const cs = Math.cos(r.face), sn = Math.sin(r.face), vmax = 2.6 * dt, md = MODELES[r.camp];
+    const P = !md ? provisoire : Math.hypot(camera.position.x - r.x, camera.position.z - r.z, camera.position.y - yAt(r.x, r.z)) < LOD_DIST ? md.pPres : md.pLoin, M = P.M;
     for (let k = 0; k < FIGS; k++) {
       const i = ri * FIGS + k; slot(r, k, tmp); toWorld(r, tmp[0], tmp[1], tmp);
       let x = sold[i * 3], z = sold[i * 3 + 1]; const ex = tmp[0] - x, ez = tmp[1] - z, e = Math.hypot(ex, ez); let bob = 0;
       if (r.snap) { x = tmp[0]; z = tmp[1]; }
       else if (e > 0.05 && dt > 0) { const st = Math.min(e, vmax * (0.8 + rnd(i, 5) * 0.4)); x += ex / e * st; z += ez / e * st; bob = Math.abs(Math.sin(t * 6 * Math.min(speed, 3) + sold[i * 3 + 2])) * 0.12 * SC; }
       sold[i * 3] = x; sold[i * 3 + 1] = z;
-      const o = i * 16; // rotation autour de la verticale puis position
+      const o = P.n++ * 16; // rotation autour de la verticale puis position
       M[o] = cs; M[o + 1] = 0; M[o + 2] = sn; M[o + 3] = 0; M[o + 4] = 0; M[o + 5] = 1; M[o + 6] = 0; M[o + 7] = 0;
       M[o + 8] = -sn; M[o + 9] = 0; M[o + 10] = cs; M[o + 11] = 0; M[o + 12] = x; M[o + 13] = yAt(x, z) + bob; M[o + 14] = z; M[o + 15] = 1;
     }
@@ -234,7 +252,7 @@ function sim(dt) {
     const gy = yAt(r.x, r.z); r.flag.position.set(r.x, gy, r.z); r.flag.rotation.y = -r.face;
     const rad = r.form === 'ligne' ? FIGS / 3 * 0.8 + 8 : 22; r.ring.visible = r.sel; r.ring.position.set(r.x, gy + 1.5, r.z); r.ring.scale.set(rad, 1, rad);
   });
-  coat.instanceMatrix.needsUpdate = true;
+  pools.forEach(p => { p.meshes.forEach(m => m.count = p.n); p.meshes[0].instanceMatrix.needsUpdate = true; });
 }
 
 /* ===== INTERFACE ===== */
