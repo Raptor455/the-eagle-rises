@@ -1,0 +1,33 @@
+{
+  "_aide": "Liste des modèles à générer. Lancer : npm run meshy (tout), npm run meshy -- fantassin-russe (un seul), npm run meshy -- --essai (montre le plan et le coût sans rien dépenser).",
+  "defauts": {
+    "ai_model": "meshy-7.1",
+    "target_polycount": 20000,
+    "texture_resolution": "2k",
+    "enable_pbr": false
+  },
+  "unites": [
+    {
+      "nom": "fantassin-russe",
+      "prompt": "Russian infantry grenadier of 1805, Napoleonic wars, dark green coat with red collar, white trousers, black bicorne-style shako, cross belts, standing, full body, realistic proportions, no weapon in hands",
+      "texture_prompt": "dark green wool coat, red facings, white breeches, black leather boots and shako, brass buttons, worn and slightly dirty",
+      "pose_mode": "a-pose",
+      "squelette": true,
+      "taille_m": 1.75,
+      "animations": { "walking": "walk", "running": "run", "idle": "idle", "shooting": "shoot" }
+    },
+    {
+      "nom": "fantassin-autrichien",
+      "prompt": "Austrian infantry soldier of 1805, Napoleonic wars, white coat with colored facings, white trousers, black leather helmet with crest (kaskett), cross belts, standing, full body, realistic proportions, no weapon in hands",
+      "pose_mode": "a-pose",
+      "squelette": true,
+      "taille_m": 1.75,
+      "animations": { "walking": "walk", "running": "run", "idle": "idle", "shooting": "shoot" }
+    },
+    {
+      "nom": "canon-gribeauval",
+      "prompt": "French Gribeauval 12-pounder field cannon of 1805 on its wooden carriage, olive green painted wood, bronze barrel, two large spoked wheels, trail on the ground",
+      "squelette": false
+    }
+  ]
+}
