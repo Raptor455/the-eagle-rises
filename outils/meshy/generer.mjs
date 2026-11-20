@@ -148,11 +148,11 @@ function imageEnDataUri(fichier) {
 
 // ---------- bibliothèque d'animations ----------
 let bibliotheque = null;
-async function chercherAnimation(mot) {
+async function chercherAnimation(mot, typeRig = 'biped') {
   if (typeof mot === 'number') return mot;
   bibliotheque ??= await appel('GET', 'v1/animations/library');
   const liste = (Array.isArray(bibliotheque) ? bibliotheque : bibliotheque.result || bibliotheque.data || [])
-    .filter((a) => a.rig_type !== 'quadruped');
+    .filter((a) => (a.rig_type || 'biped') === typeRig);
   // nom exact d'abord (espaces et _ confondus), sinon le nom le plus court qui contient le mot
   const norm = (x) => (x || '').toLowerCase().replace(/[_\s]+/g, ' ').trim();
   const m = norm(mot);
@@ -194,14 +194,15 @@ async function generer(u, d) {
   if (!u.squelette) return;
 
   const rig = await etape(nom, 'squelette', 'v1/rigging', {
-    input_task_id: modele.id, animation_type: 'biped', skeleton_template: 'mixamo', height_meters: opts.taille_m || 1.75,
+    input_task_id: modele.id,
+    ...(u.quadrupede ? { animation_type: 'quadruped' } : { animation_type: 'biped', skeleton_template: 'mixamo', height_meters: opts.taille_m || 1.75 }),
   }, 'squelette');
   await telecharger(rig.result?.rigged_character_glb_url, `${nom}-rig.glb`);
 
   const anims = Object.entries(u.animations || {});
   if (!anims.length) return;
   const ids = [];
-  for (const [, mot] of anims) ids.push(await chercherAnimation(mot));
+  for (const [, mot] of anims) ids.push(await chercherAnimation(mot, u.quadrupede ? 'quadruped' : 'biped'));
   const anim = await etape(nom, 'animations', 'v1/animations', { rig_task_id: rig.id, action_ids: ids }, 'animations');
   const glb = await telecharger(anim.result?.animation_glb_url, `${nom}-anime.glb`);
   fs.writeFileSync(path.join(dossierModeles, `${nom}-anime.glb`), renommerAnimations(glb, anims.map(([k]) => k)));

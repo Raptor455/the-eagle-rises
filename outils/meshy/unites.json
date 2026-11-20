@@ -30,7 +30,7 @@
       "taille_m": 1.75,
       "animations": {
         "idle": "Idle 12",
-        "riding": "Riding"
+        "riding": "Chair Sit Idle Male"
       }
     },
     {
@@ -42,7 +42,7 @@
       "taille_m": 1.75,
       "animations": {
         "idle": "Idle 12",
-        "riding": "Riding"
+        "riding": "Chair Sit Idle Male"
       }
     },
     {
@@ -54,7 +54,7 @@
       "taille_m": 1.75,
       "animations": {
         "idle": "Idle 12",
-        "riding": "Riding"
+        "riding": "Chair Sit Idle Male"
       }
     },
     {
@@ -66,18 +66,30 @@
       "taille_m": 1.75,
       "animations": {
         "idle": "Idle 12",
-        "riding": "Riding"
+        "riding": "Chair Sit Idle Male"
       }
     },
     {
       "nom": "cheval-selle",
       "prompt": "Napoleonic era bay cavalry horse 1805, saddled with leather saddle, sheepskin saddle cover, bridle and stirrups, no rider, standing, side view, realistic proportions",
-      "squelette": false
+      "squelette": true,
+      "quadrupede": true,
+      "animations": {
+        "idle": "Horse-Idle01",
+        "walking": "Horse-Walk",
+        "running": "Horse-Canter"
+      }
     },
     {
       "nom": "cheval-lourd",
       "prompt": "large black heavy cavalry horse 1805, Napoleonic cuirassier mount, saddled with leather saddle, blue saddle cloth with white trim, bridle and stirrups, no rider, standing, realistic proportions",
-      "squelette": false
+      "squelette": true,
+      "quadrupede": true,
+      "animations": {
+        "idle": "Horse-Idle01",
+        "walking": "Horse-Walk",
+        "running": "Horse-Canter"
+      }
     },
     {
       "nom": "licorne-russe",
