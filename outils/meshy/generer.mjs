@@ -4,6 +4,7 @@
 //   npm run meshy -- --essai           montre ce qui serait fait et le coût estimé, sans rien dépenser
 //   npm run meshy -- --animations walk liste les animations Meshy qui correspondent à « walk » (gratuit)
 //   npm run meshy -- --refaire nom     oublie ce qui a déjà été fait pour cette unité et recommence
+//   npm run meshy -- --refaire-animations nom   refait seulement les animations (garde forme, texture, squelette)
 // La clé se lit dans la variable MESHY_API_KEY, ou dans un fichier .env à la racine du dépôt (ignoré par git).
 // L'avancement est noté dans modeles/.meshy-etat.json : si le script s'arrête, il reprend là où il en était
 // sans repayer les étapes déjà faites (Meshy garde les résultats 3 jours).
@@ -23,6 +24,7 @@ const CREDITS = { apercu: 20, texture: 10, image: 30, squelette: 5, animation: 3
 const args = process.argv.slice(2);
 const essai = args.includes('--essai');
 const refaire = args.includes('--refaire');
+const refaireAnims = args.includes('--refaire-animations');
 const iAnim = args.indexOf('--animations');
 const noms = args.filter((a, i) => !a.startsWith('--') && !(iAnim >= 0 && i === iAnim + 1));
 
@@ -151,8 +153,11 @@ async function chercherAnimation(mot) {
   bibliotheque ??= await appel('GET', 'v1/animations/library');
   const liste = (Array.isArray(bibliotheque) ? bibliotheque : bibliotheque.result || bibliotheque.data || [])
     .filter((a) => a.rig_type !== 'quadruped');
-  const m = mot.toLowerCase();
-  const trouve = liste.find((a) => a.name?.toLowerCase() === m) || liste.find((a) => a.name?.toLowerCase().includes(m) || a.key?.toLowerCase().includes(m));
+  // nom exact d'abord (espaces et _ confondus), sinon le nom le plus court qui contient le mot
+  const norm = (x) => (x || '').toLowerCase().replace(/[_\s]+/g, ' ').trim();
+  const m = norm(mot);
+  const trouve = liste.find((a) => norm(a.name) === m || norm(a.key) === m)
+    || liste.filter((a) => norm(a.name).includes(m)).sort((a, b) => a.name.length - b.name.length)[0];
   if (!trouve) throw new Error(`aucune animation Meshy ne correspond à « ${mot} » (essaie npm run meshy -- --animations ${mot})`);
   console.log(`  animation « ${mot} » -> ${trouve.action_id} ${trouve.name}`);
   return trouve.action_id;
@@ -220,6 +225,7 @@ async function principal() {
   const inconnus = noms.filter((n) => !conf.unites.some((u) => u.nom === n));
   if (inconnus.length) { console.error('Unités inconnues : ' + inconnus.join(', ')); process.exit(1); }
   let choix = conf.unites.filter((u) => (noms.length ? noms.includes(u.nom) : true));
+  if (refaireAnims) for (const u of choix) { if (etat[u.nom]) delete etat[u.nom].animations; fs.rmSync(path.join(dossierModeles, `${u.nom}-anime.glb`), { force: true }); }
   if (refaire) for (const u of choix) { delete etat[u.nom]; for (const s of ['', '-rig', '-anime']) fs.rmSync(path.join(dossierModeles, `${u.nom}${s}.glb`), { force: true }); }
   // sans nom précis, on saute ce qui est déjà fini
   const fini = (u) => fs.existsSync(path.join(dossierModeles, `${u.nom}${u.squelette && Object.keys(u.animations || {}).length ? '-anime' : u.squelette ? '-rig' : ''}.glb`));

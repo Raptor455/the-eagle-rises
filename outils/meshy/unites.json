@@ -14,7 +14,7 @@
       "pose_mode": "a-pose",
       "squelette": true,
       "taille_m": 1.75,
-      "animations": { "walking": "walk", "running": "run", "idle": "idle", "shooting": "shoot" }
+      "animations": { "walking": "Walking", "running": "Running", "idle": "Idle", "shooting": "Walk Forward While Shooting" }
     },
     {
       "nom": "fantassin-autrichien",
@@ -22,7 +22,7 @@
       "pose_mode": "a-pose",
       "squelette": true,
       "taille_m": 1.75,
-      "animations": { "walking": "walk", "running": "run", "idle": "idle", "shooting": "shoot" }
+      "animations": { "walking": "Walking", "running": "Running", "idle": "Idle", "shooting": "Walk Forward While Shooting" }
     },
     {
       "nom": "canon-gribeauval",

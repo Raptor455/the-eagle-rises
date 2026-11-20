@@ -17,6 +17,7 @@
 - `npm run meshy` : génère tout ce qui manque dans `modeles/`.
 - `npm run meshy -- fantassin-russe` : une seule unité.
 - `npm run meshy -- --refaire fantassin-russe` : recommence cette unité de zéro.
+- `npm run meshy -- --refaire-animations fantassin-russe` : refait seulement les animations (environ 12 crédits).
 - `npm run meshy -- --animations shoot` : liste les animations Meshy qui contiennent « shoot » (gratuit), pour choisir.
 
 Compter 5 à 10 minutes par unité. Si le script s'arrête (coupure, erreur), relancer la même commande : il reprend où il en était, sans repayer ce qui est déjà fait. Meshy garde les résultats 3 jours.
@@ -33,7 +34,7 @@ Ajouter un bloc dans `unites.json` :
 - `prompt` : description en anglais (meilleurs résultats), ou `image` : chemin d'une image (jpg, png, webp) à la place.
 - `texture_prompt` : facultatif, précise les couleurs et matières.
 - `squelette` : `true` pour un personnage debout (bipède). Laisser `false` pour un canon, un objet.
-- `animations` : nom dans le jeu → mot cherché dans la bibliothèque Meshy (ou numéro exact `action_id`).
+- `animations` : nom dans le jeu → nom exact d'une animation Meshy (voir `--animations`), ou numéro `action_id`. Les mêmes que le fantassin français : Walking, Running, Idle, Walk Forward While Shooting.
 - `taille_m`, `pose_mode` (`a-pose` conseillé pour le squelette), et dans `defauts` : `ai_model`, `target_polycount`, `texture_resolution`.
 
 ## Coût indicatif (crédits Meshy)
