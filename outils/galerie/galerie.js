@@ -5,6 +5,7 @@ import FR from '../../src/modeles/fr.js';
 import RU from '../../src/modeles/ru.js';
 import AU from '../../src/modeles/au.js';
 import CANON from '../../src/modeles/canon.js';
+import MAISON from '../../src/modeles/maison.js';
 import { animerShader, soldat, objet } from '../../src/unites.js';
 
 const q = new URLSearchParams(location.search);
@@ -26,6 +27,9 @@ Object.entries(CAMPS).forEach(([c, D], ci) => { const M = soldat(D, HAUT, habill
   pools.push({ M, lignes }); });
 // canons des trois camps, derrière les soldats
 Object.keys(CAMPS).forEach((c, ci) => { const o = objet(CANON, habiller, c), m = new THREE.Mesh(o.pres, o.mat); m.position.set((ci - 1) * 3.4, 0, 4.5); m.rotation.y = -0.5; scene.add(m); });
+
+// maison morave : version détaillée à gauche, version allégée (vue de loin) à droite
+{ const o = objet(MAISON, habiller); [o.pres, o.loin].forEach((g, i) => { const m = new THREE.Mesh(g, o.mat); m.position.set(i ? 9 : -9, 0, 16); m.rotation.y = 0.4; scene.add(m); }); }
 
 let clip = q.get('clip') || 'marche';
 document.querySelectorAll('[data-clip]').forEach(b => { b.classList.toggle('on', b.dataset.clip === clip); b.onclick = () => { clip = b.dataset.clip; document.querySelectorAll('[data-clip]').forEach(x => x.classList.toggle('on', x === b)); }; });
