@@ -7,12 +7,16 @@ Pour l'instant : terrain, caméra, bataillons à sélectionner et à faire march
 Combat : feu de salve, pertes, moral, déroute, IA alliée minimale. Artillerie : mise en batterie, boulet et mitraille, ligne de vue sur le relief.
 Formations : ligne, colonne, carré, tirailleurs ; changer de formation prend 15 à 45 secondes, sans marche ni feu pendant ce temps.
 Charge à la baïonnette : épreuve des nerfs avant le contact (le défenseur cède, la charge échoue, ou c'est la mêlée), feu à bout portant, fatigue, désordre après le combat.
-Fin de bataille quand 60 % des unités d'une armée sont détruites ou en déroute. Pas encore de cavalerie ni de multijoueur.
+Cavalerie : trot, galop sur les 150 derniers mètres, poids de choc selon l'arme (cuirassiers, dragons, hussards, cosaques...). Elle balaie l'infanterie surprise hors du carré, les artilleurs et les fuyards, mais se brise sur un carré.
+Effectifs réels : chaque unité a son effectif, et l'échelle (1/1 à 1/20) fixe le nombre d'hommes par figurine.
+Deux batailles : Pratzen (démo) ou Austerlitz entière (`index.html?bataille=austerlitz`, 337 unités, Davout arrive à 90 minutes).
+Fin de bataille quand 60 % des hommes d'une armée sont dans des unités détruites ou en déroute. Pas encore de multijoueur.
 
 ## Commandes de combat
 - `1` `2` `3` `4` : ligne, colonne, carré, tirailleurs.
 - Clic droit sur une unité ennemie : l'attaquer (se placer à portée et tirer).
 - `C`, ou Ctrl + clic droit sur l'ennemi : charger à la baïonnette, à 300 m au plus.
+- Cavalerie : clic droit sur l'ennemi pour charger (700 m) ; elle s'approche d'abord si la cible est plus loin.
 
 Les réglages (portées, durées des manœuvres, vitesses, vigueur en mêlée, seuil de la charge) sont en tête de la section COMBAT de `src/main.js`.
 

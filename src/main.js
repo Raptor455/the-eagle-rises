@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { HW, HH, H64 } from './heights.js';
 import FR from './modeles/fr.js';
+import { UNITES } from './ordre-de-bataille.js';
 
 /* ===== TERRAIN : relief réel (tuiles 12/2238/1404 et 12/2239/1404) ===== */
 const TILE = 6403, WX = TILE * 2, WZ = TILE, VE = 2.5, H0 = 180;
@@ -115,6 +116,7 @@ const CAMPS = {
 };
 const regs = [];
 let ECHELLE = 5; // hommes par figurine
+let horloge = 0; // secondes de bataille écoulées, pour l'arrivée des renforts
 /* type : 'inf', 'cav' ou 'art' ; hommes : effectif réel ; sorte : ligne, leger, grenadiers, garde, cuirassiers, dragons, hussards... ; opts.pieces pour une batterie */
 function addReg(camp, nom, lat, lon, face, type, h, sorte, opts) { const [x, z] = ll(lat, lon); type = type || 'inf'; opts = opts || {};
   const pieces = type === 'art' ? opts.pieces || 4 : 0;
@@ -122,9 +124,14 @@ function addReg(camp, nom, lat, lon, face, type, h, sorte, opts) { const [x, z] 
 const figsDe = r => r.type === 'art' ? r.pieces * SERVANTS : Math.max(6, Math.round(r.h0 / ECHELLE));
 const ESP = () => Math.max(0.45, Math.sqrt(ECHELLE / 5)); // espacement des figurines : serré à 1/1, desserré quand une figurine vaut plusieurs hommes
 const ETAT0 = () => ({ manoeuvre: 0, desordre: 0, fatigue: 0, charge: null, testCharge: false, melee: null, meleeT: 0, choc: 0, cible: null, assaut: false, issue: null }); // manœuvre, combat rapproché, fatigue
-/* Ordre de bataille provisoire, à vérifier sur sources.
+/* Deux batailles : la démo de Pratzen (par défaut), ou Austerlitz entière avec ?bataille=austerlitz dans l'adresse */
+const BATAILLE = new URLSearchParams(location.search).get('bataille') === 'austerlitz' ? 'austerlitz' : 'pratzen';
+const RABAT = { tirailleurs: 'leger', grenzer: 'leger', pionniers: 'ligne' }; // sortes rabattues sur la plus proche
+if (BATAILLE === 'austerlitz') UNITES.forEach(([camp, nom, lat, lon, face, type, h, sorte, opts]) => addReg(camp, nom, lat, lon, face, type, h, RABAT[sorte] || sorte, opts));
+/* Ordre de bataille provisoire de la démo, à vérifier sur sources.
    France : IVe corps (Soult), divisions Saint-Hilaire et Vandamme, au pied du plateau le long du Goldbach. */
 const E = Math.PI / 2; // face à l'est
+if (BATAILLE === 'pratzen') {
 [['10e léger', 2], ['14e de ligne', 2], ['36e de ligne', 2], ['43e de ligne', 2], ['55e de ligne', 2]].forEach(([n, b], i) => { for (let k = 0; k < b; k++) addReg('fr', `${n}, ${k + 1}${k ? 'e' : 'er'} bataillon (Saint-Hilaire)`, 49.1415 - i * 0.0019, 16.7395 - k * 0.0016, E); });
 [['24e léger', 2], ['4e de ligne', 2], ['28e de ligne', 2], ['46e de ligne', 2], ['57e de ligne', 2]].forEach(([n, b], i) => { for (let k = 0; k < b; k++) addReg('fr', `${n}, ${k + 1}${k ? 'e' : 'er'} bataillon (Vandamme)`, 49.1515 - i * 0.0017, 16.7440 - k * 0.0016, E); });
 /* Alliés : 4e colonne, surprise en marche vers le sud-ouest sur le plateau. */
@@ -138,6 +145,7 @@ addReg('ru', 'Batterie russe de 6 livres', 49.1372, 16.7722, SO, 'art'); addReg(
 /* Cavalerie, provisoire : brigade légère Margaron du IVe corps, et quelques escadrons alliés pour essayer les charges. À remplacer par l'ordre de bataille complet. */
 addReg('fr', '8e hussards (Margaron)', 49.1460, 16.7330, E, 'cav', 360, 'hussards'); addReg('fr', '26e chasseurs à cheval (Margaron)', 49.1380, 16.7320, E, 'cav', 340, 'chasseurs');
 addReg('ru', 'Cosaques', 49.1350, 16.7830, SO, 'cav', 300, 'cosaques'); addReg('au', 'Chevau-légers', 49.1470, 16.7920, SO, 'cav', 400, 'chevau-legers');
+}
 const SERVANTS = 6, ECART_PIECES = 14;
 
 /* modèles Meshy préparés par outils/convertir_modele.py : un maillage détaillé de près, un allégé de loin */
@@ -206,8 +214,9 @@ function build() {
   [provisoire, cavaliers].forEach(p => { p.meshes[0].setColorAt(0, new THREE.Color()); p.C = p.meshes[0].instanceColor.array; });
   regs.forEach((r, ri) => { for (let k = 0; k < r.max; k++) { const i = r.f0 + k;
     sold[i * 3] = r.x; sold[i * 3 + 1] = r.z; sold[i * 3 + 2] = rnd(i, 7); } r.snap = true; // position, et où en est le pas
-    Object.assign(r, { n: r.max, deploi: 0, tirT: 0, moral: 100, etat: 'ok', recharge: rnd(ri, 1) * 20, sousFeu: 99, acc: 0, moving: false, tx: r.x, tz: r.z }, ETAT0()); r.flag.children[1].material.color.setHex(CAMPS[r.camp].coul); r.flag.visible = true; });
-  mortsInit();
+    r.arrivee = (r.opts.arrivee || 0) * 60; r.reserve = r.arrivee > 0; // renfort : absent jusqu'à son heure
+    Object.assign(r, { n: r.reserve ? 0 : r.max, deploi: 0, tirT: 0, moral: 100, etat: 'ok', recharge: rnd(ri, 1) * 20, sousFeu: 99, acc: 0, moving: false, tx: r.x, tz: r.z }, ETAT0()); r.flag.children[1].material.color.setHex(CAMPS[r.camp].coul); r.flag.visible = !r.reserve; });
+  horloge = 0; mortsInit();
   canonsInit(); fin = false; const fe = document.getElementById('fin'); if (fe) fe.style.display = 'none';
   document.getElementById('nb').textContent = f0.toLocaleString('fr-FR');
 }
@@ -331,6 +340,8 @@ const CASSE = 0.6;                                                        // une
 const PORTEE_CHARGE_CAV = 700, ELAN_CAV = 150;
 const POIDS = { cuirassiers: 1.4, carabiniers: 1.4, garde: 1.3, grenadiers: 1.25, dragons: 1.15, uhlans: 1.1, 'chevau-legers': 1, hussards: 1, chasseurs: 1, cosaques: 0.8 };
 const poids = r => POIDS[r.sorte] || 1;
+const QUALITE = { garde: 1.3, grenadiers: 1.15, carabiniers: 1.1, cuirassiers: 1.1, leger: 1.05, cosaques: 0.9 }; // élan et tenue des troupes d'élite
+const qualite = r => QUALITE[r.sorte] || 1;
 const TENUE_CONTRE_CAV = { carre: 3, ligne: 0.6, colonne: 0.8, tirailleurs: 0.25 }; // seul le carré arrête la cavalerie
 const PORTEE_ART = 900, MITRAILLE = 250, RECHARGE_ART = 30, ARC_ART = 0.45, MISE_EN_BATTERIE = 40, PIVOT = 12;
 const hommes = r => Math.round(r.n / (r.max || 1) * r.h0);
@@ -403,7 +414,7 @@ function canonnade(r, e, d) {
   r.recharge = RECHARGE_ART * (0.9 + Math.random() * 0.25); r.mitraille = mitraille;
 }
 /* charge à la baïonnette : marche, élan à 80 m, puis épreuve des nerfs avant le contact. Le plus souvent, un camp cède avant le choc. */
-const peutCharger = r => r.type !== 'art' && r.form !== 'carre' && r.manoeuvre <= 0 && r.fatigue < (r.type === 'cav' ? 60 : 75) && !r.melee && r.etat === 'ok';
+const peutCharger = r => r.type !== 'art' && r.sorte !== 'etat-major' && r.form !== 'carre' && r.manoeuvre <= 0 && r.fatigue < (r.type === 'cav' ? 60 : 75) && !r.melee && r.etat === 'ok';
 const porteeCharge = r => r.type === 'cav' ? PORTEE_CHARGE_CAV : PORTEE_CHARGE;
 const chargeable = (r, o) => o.n > 0 && ennemis(r, o) && (o.etat === 'ok' || (r.type === 'cav' && o.etat === 'deroute')); // la cavalerie sabre aussi les fuyards
 function lancerCharge(r, e) { r.charge = e; r.cible = null; r.testCharge = false; r.moving = true; }
@@ -411,10 +422,10 @@ function finCharge(r, desordre) { r.charge = null; r.testCharge = false; r.movin
 function epreuve(r, e) { // le choc a-t-il lieu ? on compare l'élan de l'assaillant à la tenue du défenseur
   const nombre = Math.sqrt(Math.max(1, hommes(r)) / Math.max(1, hommes(e)));
   const rc = r.type === 'cav', ec = e.type === 'cav';
-  const att = r.moral * 1.1 * (rc ? poids(r) : r.form === 'colonne' ? 1.15 : r.form === 'tirailleurs' ? 0.6 : 1) * (1 - r.fatigue / 250) * Math.min(1.6, rc ? Math.max(0.85, nombre) : nombre); // un escadron pèse plus que son nombre
+  const att = r.moral * 1.1 * qualite(r) * (rc ? poids(r) : r.form === 'colonne' ? 1.15 : r.form === 'tirailleurs' ? 0.6 : 1) * (1 - r.fatigue / 250) * Math.min(1.6, rc ? Math.max(0.85, nombre) : nombre); // un escadron pèse plus que son nombre
   const flanc = e.form !== 'carre' && e.type !== 'art' && Math.abs(ecart(cap(e, r), e.face)) > 1.05;
   const tenue = e.type === 'art' ? (rc ? 0.6 : 0.8) : ec ? (rc ? poids(e) * (e.charge ? 1 : 0.7) : 1.2) : rc ? TENUE_CONTRE_CAV[e.form] : FORMES[e.form].tenue; // une cavalerie arrêtée reçoit mal une charge
-  const def = e.moral * tenue * (flanc ? 0.5 : 1) * (e.manoeuvre > 0 ? 0.6 : 1) * (e.desordre > 0 ? 0.8 : 1) * (1 - e.fatigue / 250) * (altAt(e.x, e.z) - altAt(r.x, r.z) > 4 ? 1.15 : 1);
+  const def = e.moral * tenue * qualite(e) * (flanc ? 0.5 : 1) * (e.manoeuvre > 0 ? 0.6 : 1) * (e.desordre > 0 ? 0.8 : 1) * (1 - e.fatigue / 250) * (altAt(e.x, e.z) - altAt(r.x, r.z) > 4 ? 1.15 : 1);
   const x = def * (0.75 + Math.random() * 0.5) / att;
   if (x < 0.85) { e.moral = Math.min(e.moral, 15); e.sousFeu = 0; r.moral = Math.min(100, r.moral + 8); finCharge(r, rc ? 20 : 10); return 'cède'; } // le défenseur lâche pied avant le choc
   if (x > 1.25 || r.moral < 40) { r.moral -= 15; finCharge(r, rc ? 30 : 15); if (rc) { const a = cap(e, r); r.tx = r.x + Math.sin(a) * 200; r.tz = r.z - Math.cos(a) * 200; r.tface = r.face; r.moving = true; } return 'échoue'; } // la cavalerie repoussée tourne bride                                                    // l'assaillant hésite et s'arrête
@@ -499,7 +510,9 @@ const tmp = [0, 0, 0]; let tAnim = 0;
 function sim(dt) {
   const t = performance.now() / 1000; pools.forEach(p => p.n = 0);
   if (speed > 0) tAnim += dt / speed * Math.min(speed, 2.5); // les jambes ne s'emballent pas en accéléré
+  horloge += dt;
   regs.forEach((r, ri) => {
+    if (r.reserve && horloge >= r.arrivee) { r.reserve = false; r.n = r.max; r.snap = true; r.flag.visible = true; avis(`Renforts : ${r.opts.corps || r.nom} entre en ligne.`); } // le renfort arrive
     if (r.n <= 0) return;
     if (dt > 0) combat(r, dt);
     if (r.n <= 0) return;
@@ -562,7 +575,7 @@ function etatInf(r) {
 }
 let fin = false;
 function bilan() { // une armée dont la plupart des unités sont détruites ou en fuite est battue
-  if (fin) return; const casse = f => { const R = regs.filter(f), tot = R.reduce((a, r) => a + r.h0, 0); return R.filter(r => r.n <= 0 || r.etat !== 'ok').reduce((a, r) => a + r.h0, 0) / tot; };
+  if (fin) return; const casse = f => { const R = regs.filter(r => f(r) && !r.reserve), tot = R.reduce((a, r) => a + r.h0, 0); return R.filter(r => r.n <= 0 || r.etat !== 'ok').reduce((a, r) => a + r.h0, 0) / tot; };
   const fr = casse(r => r.camp === 'fr'), al = casse(r => r.camp !== 'fr'); if (fr < CASSE && al < CASSE) return;
   fin = true; const e = document.getElementById('fin'); e.innerHTML = al >= CASSE ? '<b>Victoire française</b><br>Les Alliés sont rejetés du plateau.' : '<b>Défaite</b><br>Le IVe corps est brisé.'; e.style.display = 'block';
 }
@@ -581,6 +594,7 @@ document.querySelectorAll('[data-v]').forEach(b => b.onclick = () => setSpeed(+b
 document.getElementById('brume').onclick = e => { mist.uMist.value = mist.uMist.value ? 0 : 0.85; e.target.classList.toggle('on', !!mist.uMist.value); };
 document.getElementById('ia').onclick = e => { iaAllies = !iaAllies; e.target.classList.toggle('on', iaAllies); regs.forEach(r => r.sel = false); hud(); };
 document.getElementById('figs').onchange = e => { ECHELLE = +e.target.value; build(); };
+const selB = document.getElementById('bataille'); selB.value = BATAILLE; selB.onchange = () => { location.search = selB.value === 'austerlitz' ? '?bataille=austerlitz' : ''; };
 document.getElementById('aide').onclick = () => document.getElementById('touches').classList.toggle('cache');
 function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize(); build(); hud(); setSpeed(1);
