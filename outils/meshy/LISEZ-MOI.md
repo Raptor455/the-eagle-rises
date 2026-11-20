@@ -34,7 +34,7 @@ Ajouter un bloc dans `unites.json` :
 - `prompt` : description en anglais (meilleurs résultats), ou `image` : chemin d'une image (jpg, png, webp) à la place.
 - `texture_prompt` : facultatif, précise les couleurs et matières.
 - `squelette` : `true` pour un personnage debout (bipède). Laisser `false` pour un canon, un objet.
-- `animations` : nom dans le jeu → nom exact d'une animation Meshy (voir `--animations`), ou numéro `action_id`. Les mêmes que le fantassin français : Walking, Running, Idle, Walk Forward While Shooting.
+- `animations` : nom dans le jeu → nom exact d'une animation Meshy (voir `--animations`), ou numéro `action_id`. Pour un fantassin : Casual Walk, Run 2, Idle 12, Walk Forward While Shooting (les deux derniers sont ceux du Français).
 - `taille_m`, `pose_mode` (`a-pose` conseillé pour le squelette), et dans `defauts` : `ai_model`, `target_polycount`, `texture_resolution`.
 
 ## Coût indicatif (crédits Meshy)
