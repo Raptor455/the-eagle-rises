@@ -2,6 +2,10 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { HW, HH, H64 } from './heights.js';
 import FR from './modeles/fr.js';
+import RU from './modeles/ru.js';
+import AU from './modeles/au.js';
+import CANON from './modeles/canon.js';
+import { animerShader, soldat, objet } from './unites.js';
 
 /* ===== TERRAIN : relief réel (tuiles 12/2238/1404 et 12/2239/1404) ===== */
 const TILE = 6403, WX = TILE * 2, WZ = TILE, VE = 2.5, H0 = 180;
@@ -36,14 +40,9 @@ function withMist(mat, anim) { // anim : le soldat est animé par la carte graph
   mat.customProgramCacheKey = () => anim ? 'anime' : 'fixe';
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, mist, anim || {});
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWY;' + (anim ? `
-attribute vec4 aJ; attribute vec4 aW; attribute vec2 aRow; uniform sampler2D uOs; uniform float uHaut;
-mat4 osM(float j, float l){ int x=int(j+0.5)*3, y=int(l+0.5); vec4 a=texelFetch(uOs,ivec2(x,y),0), b=texelFetch(uOs,ivec2(x+1,y),0), c=texelFetch(uOs,ivec2(x+2,y),0);
-  return mat4(a.x,b.x,c.x,0., a.y,b.y,c.y,0., a.z,b.z,c.z,0., a.w,b.w,c.w,1.); }` : ''))
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWY;')
       .replace('#include <project_vertex>', '#include <project_vertex>\nvec4 wpM=vec4(transformed,1.0);\n#ifdef USE_INSTANCING\nwpM=instanceMatrix*wpM;\n#endif\nwpM=modelMatrix*wpM;vWY=wpM.y;');
-    if (anim) sh.vertexShader = sh.vertexShader
-      .replace('#include <beginnormal_vertex>', 'float lA=floor(aRow.x),fB=fract(aRow.x);\nmat4 sk=((aW.x*osM(aJ.x,lA)+aW.y*osM(aJ.y,lA)+aW.z*osM(aJ.z,lA)+aW.w*osM(aJ.w,lA))*(1.0-fB)+(aW.x*osM(aJ.x,aRow.y)+aW.y*osM(aJ.y,aRow.y)+aW.z*osM(aJ.z,aRow.y)+aW.w*osM(aJ.w,aRow.y))*fB)/(aW.x+aW.y+aW.z+aW.w);\n#include <beginnormal_vertex>\nobjectNormal=mat3(sk)*objectNormal;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed=(sk*vec4(transformed,1.0)).xyz*uHaut;');
+    if (anim) animerShader(sh);
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWY;uniform float uMist,uTop,uBot;uniform vec3 uMistCol;')
       .replace('#include <fog_fragment>', '#include <fog_fragment>\ngl_FragColor.rgb=mix(gl_FragColor.rgb,uMistCol,uMist*smoothstep(uTop,uBot,vWY)*clamp(vFogDepth/900.0,0.12,1.0));');
   };
@@ -124,25 +123,7 @@ const PIECES = 4, SERVANTS = 6, ECART_PIECES = 14;
 
 /* modèles Meshy préparés par outils/convertir_modele.py : un maillage détaillé de près, un allégé de loin */
 const HAUT = 1.8 * SC, LOD_DIST = 260;
-const bin = (t, T) => { const b = atob(t), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new T(u.buffer); };
-function geoModele(d) {
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(bin(d.pos, Float32Array), 3));
-  g.setAttribute('normal', new THREE.BufferAttribute(bin(d.nor, Int8Array), 3, true));
-  g.setAttribute('uv', new THREE.BufferAttribute(bin(d.uv, Float32Array), 2));
-  g.setAttribute('aJ', new THREE.BufferAttribute(bin(d.os, Uint8Array), 4));        // les os qui tirent ce sommet
-  g.setAttribute('aW', new THREE.BufferAttribute(bin(d.poids, Uint8Array), 4, true)); // et leur poids
-  g.setIndex(new THREE.BufferAttribute(bin(d.idx, Uint16Array), 1)); return g;
-}
-function modele(D) { // soldat animé : corps et fusil partagent le même squelette, le fusil suit la main droite
-  const a = D.anim, table = new THREE.DataTexture(bin(a.table, Uint16Array), a.os * 3, a.images, THREE.RGBAFormat, THREE.HalfFloatType); table.needsUpdate = true;
-  const un = { uOs: { value: table }, uHaut: { value: HAUT } };
-  const mat = d => { const t = new THREE.TextureLoader().load(d.tex); t.flipY = false; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return withMist(new THREE.MeshLambertMaterial({ map: t, side: THREE.DoubleSide }), un); };
-  const m = { clips: a.clips, pres: [geoModele(D.pres)], loin: [geoModele(D.loin)], mats: [mat(D)] };
-  if (D.fusil) { m.pres.push(geoModele(D.fusil.pres)); m.loin.push(geoModele(D.fusil.loin)); m.mats.push(mat(D.fusil)); }
-  return m;
-}
-const MODELES = { fr: modele(FR) }; // les autres camps gardent la figurine provisoire
+const MODELES = { fr: soldat(FR, HAUT, withMist), ru: soldat(RU, HAUT, withMist), au: soldat(AU, HAUT, withMist) }; // Russes et Autrichiens : squelette et animations du Français
 
 let sold, pools = [], provisoire; // sold : x, z, décalage de pas par figurine
 const matCoat = withMist(new THREE.MeshLambertMaterial({ vertexColors: true })), matRest = withMist(new THREE.MeshLambertMaterial({ vertexColors: true }));
@@ -177,15 +158,11 @@ function build() {
 /* repère du bataillon -> carte : l'avant regarde (sin f, -cos f), la droite est (cos f, sin f) */
 function toWorld(r, lx, lz, out) { const cs = Math.cos(r.face), sn = Math.sin(r.face); out[0] = r.x + lx * cs - lz * sn; out[1] = r.z + lx * sn + lz * cs; }
 
-/* canons provisoires dessinés en code, en attendant le modèle */
-const gCanon = (() => { const P = [], col = (g, c) => { const k = new THREE.Color(c), n = g.attributes.position.count, a = new Float32Array(n * 3); for (let i = 0; i < n; i++) { a[i * 3] = k.r; a[i * 3 + 1] = k.g; a[i * 3 + 2] = k.b; } g.setAttribute('color', new THREE.BufferAttribute(a, 3)); return g.toNonIndexed(); };
-  const tube = new THREE.CylinderGeometry(0.11, 0.16, 2.3, 10); tube.rotateX(-Math.PI / 2); tube.rotateX(0.06); tube.translate(0, 1.15, -0.5); P.push(col(tube, 0xb08a3c));
-  for (const sx of [-0.8, 0.8]) { const roue = new THREE.CylinderGeometry(0.72, 0.72, 0.1, 14); roue.rotateZ(Math.PI / 2); roue.translate(sx, 0.72, 0); P.push(col(roue, 0x4d5a36)); }
-  const essieu = new THREE.BoxGeometry(1.6, 0.14, 0.14); essieu.translate(0, 0.72, 0); P.push(col(essieu, 0x3c4630));
-  const fleche = new THREE.BoxGeometry(0.3, 0.22, 2.9); fleche.rotateX(-0.22); fleche.translate(0, 0.5, 1.3); P.push(col(fleche, 0x4d5a36));
-  const g = mergeGeometries(P); g.scale(SC, SC, SC); return g; })();
-const matCanon = withMist(new THREE.MeshLambertMaterial({ vertexColors: true })); let canons = null;
-function canonsInit() { if (canons) { scene.remove(canons); canons.dispose(); } const B = regs.filter(r => r.type === 'art'); canons = new THREE.InstancedMesh(gCanon, matCanon, B.length * PIECES); canons.frustumCulled = false; scene.add(canons); B.forEach((r, i) => r.canon0 = i * PIECES); }
+/* canons : pièce Gribeauval de Meshy (modeles/canon-gribeauval.glb), affût jaune ocre pour les Autrichiens */
+const mSC = new THREE.Vector3(SC, SC, SC); let canons = []; // grossis comme les soldats
+function canonsInit() { canons.forEach(c => { scene.remove(c); c.dispose(); }); canons = [];
+  for (const camp in CAMPS) { const B = regs.filter(r => r.type === 'art' && r.camp === camp); if (!B.length) continue;
+    const o = objet(CANON, withMist, camp), mesh = new THREE.InstancedMesh(o.pres, o.mat, B.length * PIECES); mesh.frustumCulled = false; scene.add(mesh); canons.push(mesh); B.forEach((r, i) => { r.canons = mesh; r.canon0 = i * PIECES; }); } }
 
 /* drapeaux et anneaux de sélection */
 const flagG = new THREE.PlaneGeometry(9, 6); flagG.translate(4.5, 13, 0);
@@ -390,11 +367,11 @@ function sim(dt) {
     }
     r.snap = false;
     const gy = yAt(r.x, r.z); r.flag.position.set(r.x, gy, r.z); r.flag.rotation.y = -r.face;
-    if (r.type === 'art') for (let g = 0; g < PIECES; g++) { toWorld(r, (g - (PIECES - 1) / 2) * ECART_PIECES, 0, tmp); mE.set(0, -r.face, 0); mQ.setFromEuler(mE); mV.set(tmp[0], yAt(tmp[0], tmp[1]), tmp[1]); canons.setMatrixAt(r.canon0 + g, mM.compose(mV, mQ, mS)); }
+    if (r.type === 'art') for (let g = 0; g < PIECES; g++) { toWorld(r, (g - (PIECES - 1) / 2) * ECART_PIECES, 0, tmp); mE.set(0, -r.face, 0); mQ.setFromEuler(mE); mV.set(tmp[0], yAt(tmp[0], tmp[1]), tmp[1]); r.canons.setMatrixAt(r.canon0 + g, mM.compose(mV, mQ, mSC)); }
     const rad = r.type === 'art' ? 36 : r.form === 'ligne' ? FIGS / 3 * 0.8 + 8 : 22; r.ring.visible = r.sel; r.ring.position.set(r.x, gy + 1.5, r.z); r.ring.scale.set(rad, 1, rad);
   });
   pools.forEach(p => { p.meshes.forEach(m => m.count = p.n); p.meshes[0].instanceMatrix.needsUpdate = true; if (p.R) p.R.needsUpdate = true; });
-  canons.instanceMatrix.needsUpdate = true;
+  canons.forEach(c => c.instanceMatrix.needsUpdate = true);
   fumeeMaj(dt);
 }
 

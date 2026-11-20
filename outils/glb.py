@@ -23,6 +23,14 @@ class Glb:
 
 def quat_mat(q):
     x, y, z, w = q; return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)], [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)], [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+def mat_quat(m):
+    m = np.asarray(m, float)[:3, :3]; w = np.sqrt(max(0.0, 1 + m[0, 0] + m[1, 1] + m[2, 2])) / 2; x = np.sqrt(max(0.0, 1 + m[0, 0] - m[1, 1] - m[2, 2])) / 2
+    y = np.sqrt(max(0.0, 1 - m[0, 0] + m[1, 1] - m[2, 2])) / 2; z = np.sqrt(max(0.0, 1 - m[0, 0] - m[1, 1] + m[2, 2])) / 2
+    x = np.copysign(x, m[2, 1] - m[1, 2]); y = np.copysign(y, m[0, 2] - m[2, 0]); z = np.copysign(z, m[1, 0] - m[0, 1]); q = np.array([x, y, z, w]); return q / np.linalg.norm(q)
+def tourner(d, t):
+    """Plus petite rotation qui amène la direction d sur la direction t."""
+    d = d / np.linalg.norm(d); t = t / np.linalg.norm(t); v = np.cross(d, t); c = float(np.dot(d, t)); K = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    return np.eye(3) + K + K @ K / (1 + c)
 def trs(t, r, s):
     m = np.eye(4); m[:3, :3] = quat_mat(r) * np.asarray(s)[None, :]; m[:3, 3] = t; return m
 
@@ -45,8 +53,9 @@ class Squelette:
             self.clips[a['name']] = pistes
     def nom(self, k): return self.noeuds[self.os[k]].get('name')
     def duree(self, clip): return max(p[2][-1] for p in self.clips[clip])
-    def pose(self, clip=None, t=0.0):
-        """Matrices d'habillage (une par os) : position animée = somme des poids x matrice x position de repos."""
+    def pose(self, clip=None, t=0.0, fixes=None):
+        """Matrices d'habillage (une par os) : position animée = somme des poids x matrice x position de repos.
+           fixes : {noeud: rotation locale} imposée quelle que soit l'animation (bras gauche au port d'arme)."""
         loc = {}
         for i, n in enumerate(self.noeuds): loc[i] = [np.array(n.get('translation', [0, 0, 0]), float), np.array(n.get('rotation', [0, 0, 0, 1]), float), np.array(n.get('scale', [1, 1, 1]), float)]
         if clip:
@@ -60,6 +69,7 @@ class Squelette:
                     v = v0 * (1 - a) + v1 * a
                     if path == 'rotation': v = v / np.linalg.norm(v)
                 loc[node][{'translation': 0, 'rotation': 1, 'scale': 2}[path]] = v
+        for node, q in (fixes or {}).items(): loc[node][1] = np.asarray(q, float)
         G = {}
         for i in self.ordre:
             m = trs(*loc[i]) if 'matrix' not in self.noeuds[i] else np.array(self.noeuds[i]['matrix']).reshape(4, 4).T

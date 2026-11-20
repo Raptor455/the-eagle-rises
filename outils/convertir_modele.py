@@ -1,13 +1,15 @@
 """Prépare un soldat Meshy animé (.glb avec squelette et animations) pour la foule.
    python3 outils/convertir_modele.py modeles/fantassin-francais-anime.glb fr --fusil modeles/fusil-1777.glb
-   Écrit src/modeles/fr.js : maillage détaillé et allégé, texture réduite, fusil tenu en main droite,
-   et les animations sous forme d'une table de matrices d'os (une ligne par image)."""
+   Écrit src/modeles/fr.js : maillage détaillé et allégé, texture réduite, fusil au port d'arme (main gauche,
+   contre l'épaule), et les animations sous forme d'une table de matrices d'os (une ligne par image).
+   Un soldat Meshy sans squelette (pose A, comme le français) emprunte squelette et animations à un soldat animé :
+   python3 outils/convertir_modele.py modeles/fantassin-russe.glb ru --squelette modeles/fantassin-francais-anime.glb --fusil modeles/fusil-1777.glb"""
 import sys, os, json, base64, io, subprocess, tempfile, argparse
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from glb import Glb, Squelette
+from glb import Glb, Squelette, mat_quat, tourner
 racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ap = argparse.ArgumentParser(); ap.add_argument('src'); ap.add_argument('nom'); ap.add_argument('--fusil'); a = ap.parse_args()
+ap = argparse.ArgumentParser(); ap.add_argument('src'); ap.add_argument('nom'); ap.add_argument('--fusil'); ap.add_argument('--squelette', help='soldat animé dont on reprend squelette et animations, pour un modèle sans squelette'); a = ap.parse_args()
 # nom dans le jeu : (mot cherché dans le nom du clip, images par seconde)
 CLIPS = {'marche': ('walking', 24), 'course': ('running', 24), 'attente': ('idle', 10), 'tir': ('shooting', 20)}
 
@@ -22,10 +24,39 @@ def paquet(m, idx):
     return {'n': len(used), 'pos': b64(m['pos'][used].astype('<f4')), 'nor': b64(np.clip(np.round(m['nor'][used] * 127), -127, 127).astype('i1')), 'uv': b64(m['uv'][used].astype('<f4')),
             'os': b64(m['os'][used].astype('u1')), 'poids': b64(np.clip(np.round(m['poids'][used] * 255), 0, 255).astype('u1')), 'idx': b64(remap[idx].astype('<u2')), 'tri': len(idx) // 3}
 def texture(g, cote):
-    buf = io.BytesIO(); g.image().resize((cote, cote)).save(buf, 'JPEG', quality=86); return 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
+    im = g.image().resize((cote, cote))
+    buf = io.BytesIO(); im.save(buf, 'JPEG', quality=86); return 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
 
-g = Glb(a.src); m = g.maillage(); sq = Squelette(g); noms = [sq.nom(k) for k in range(len(sq.os))]
-haut = float(m['pos'][:, 1].max()); print('soldat :', len(m['pos']), 'sommets,', len(m['idx']) // 3, 'triangles, hauteur', round(haut, 3), ',', len(noms), 'os')
+g = Glb(a.src); m = g.maillage()
+if a.squelette: # modèle sans squelette : on le cale sur le soldat animé et chaque sommet prend les os de ses voisins les plus proches
+    ref = Glb(a.squelette); mr = ref.maillage(); sq = Squelette(ref); P = m['pos'].astype(np.float64); Q = mr['pos'].astype(np.float64)
+    main = lambda X: X[np.argmax(np.abs(X[:, 0])), 1] - X[:, 1].min() # hauteur des mains en pose A : la coiffe ne compte pas dans la taille
+    P = (P - [0, P[:, 1].min(), 0]) * (main(Q) / main(P)) + [0, Q[:, 1].min(), 0] # même taille, pieds au sol
+    for ax in (0, 2): # centré sur le buste ; en largeur, envergure des bras alignée
+        bP = P[(P[:, 1] > 0.6 * P[:, 1].max()) & (P[:, 1] < 0.75 * P[:, 1].max()), ax]; bQ = Q[(Q[:, 1] > 0.6 * Q[:, 1].max()) & (Q[:, 1] < 0.75 * Q[:, 1].max()), ax]
+        P[:, ax] -= np.median(bP) - np.median(bQ)
+    P[:, 0] *= np.ptp(Q[:, 0]) / np.ptp(P[:, 0])
+    d = np.linalg.norm(P[:, None, :] - Q[None, :, :], axis=2); k = np.argsort(d, axis=1)[:, :4]; w = 1 / (np.take_along_axis(d, k, 1) + 1e-4) ** 2; w /= w.sum(1, keepdims=True)
+    J = np.zeros((len(P), len(sq.os))) # poids par os, mélangés entre les 4 voisins
+    for c in range(4): np.add.at(J, (np.repeat(np.arange(len(P)), 4), mr['os'][k[:, c]].astype(int).ravel()), (w[:, c:c + 1] * mr['poids'][k[:, c]]).ravel())
+    top = np.argsort(-J, axis=1)[:, :4]; tw = np.take_along_axis(J, top, 1); tw /= tw.sum(1, keepdims=True)
+    m['pos'] = P.astype(np.float32); m['os'] = top.astype(np.uint8); m['poids'] = tw.astype(np.float32)
+    print('squelette repris de', a.squelette)
+else: sq = Squelette(g)
+noms = [sq.nom(k) for k in range(len(sq.os))]
+haut = float((mr if a.squelette else m)['pos'][:, 1].max()) # hauteur du soldat qui porte le squelette
+# PORT D'ARME : le bras gauche est figé dans toutes les animations, main à hauteur de hanche sous l'épaule ;
+# le fusil y est fixé, vertical contre l'épaule gauche. Le soldat regarde vers +z, sa gauche est +x, 1,75 m de haut.
+os_ = {n: sq.os[noms.index('mixamorig:' + n)] for n in ('Spine2', 'LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand')}
+FIXES = {os_['LeftShoulder']: sq.noeuds[os_['LeftShoulder']].get('rotation', [0, 0, 0, 1]), os_['LeftHand']: sq.noeuds[os_['LeftHand']].get('rotation', [0, 0, 0, 1])}
+COUDE = np.array([0.205, 1.14, 0.045]) * haut / 1.75; POIGNET = np.array([0.215, 0.95, 0.175]) * haut / 1.75
+for nom_os, enfant, cible in (('LeftArm', 'LeftForeArm', COUDE), ('LeftForeArm', 'LeftHand', POIGNET)):
+    G = sq.pose(fixes=FIXES)[1]; k = noms.index('mixamorig:' + nom_os); kp = sq.parent[os_[nom_os]]
+    Gp = G[sq.os.index(kp)] if kp in sq.os else None
+    d = G[noms.index('mixamorig:' + enfant)][:3, 3] - G[k][:3, 3]; R = tourner(d, cible - G[k][:3, 3]) @ G[k][:3, :3]
+    FIXES[os_[nom_os]] = mat_quat(np.linalg.inv(Gp[:3, :3]) @ R)
+_G = sq.pose(fixes=FIXES)[1]; print('port d\'arme : coude', np.round(_G[noms.index('mixamorig:LeftForeArm')][:3, 3], 3), 'poignet', np.round(_G[noms.index('mixamorig:LeftHand')][:3, 3], 3))
+print('soldat :', len(m['pos']), 'sommets,', len(m['idx']) // 3, 'triangles, hauteur', round(haut, 3), ',', len(noms), 'os')
 out = {'pres': paquet(m, m['idx']), 'loin': paquet(m, alleger(m['pos'], m['idx'], 420)), 'tex': texture(g, 1024)}
 
 # animations : le jeu veut un soldat de hauteur 1, pieds au sol, qui regarde vers -z
@@ -34,9 +65,9 @@ for nom, (mot, ips) in CLIPS.items():
     c = next((k for k in sq.clips if mot in k.lower()), None)
     if not c: print('  animation absente :', nom); continue
     d = sq.duree(c); n = max(2, int(round(d * ips))); clips[nom] = [len(lignes), n, n / d]
-    for i in range(n): lignes.append((N @ sq.pose(c, d * i / n)[0])[:, :3, :])
+    for i in range(n): lignes.append((N @ sq.pose(c, d * i / n, FIXES)[0])[:, :3, :])
     # chemin parcouru par cycle : à chaque image, le pied le plus bas est posé et recule sous le corps d'autant que le soldat avance
-    pieds = np.array([[(N @ sq.pose(c, d * i / n)[1][noms.index(f'mixamorig:{cote}Foot')])[:3, 3] for cote in ('Left', 'Right')] for i in range(n + 1)])
+    pieds = np.array([[(N @ sq.pose(c, d * i / n, FIXES)[1][noms.index(f'mixamorig:{cote}Foot')])[:3, 3] for cote in ('Left', 'Right')] for i in range(n + 1)])
     pas = sum(abs(pieds[i + 1, k, 2] - pieds[i, k, 2]) for i in range(n) for k in [int(np.argmin((pieds[i, :, 1] + pieds[i + 1, :, 1])))])
     clips[nom].append(round(float(pas), 4))
     print('  animation', nom, '<-', c, ':', n, 'images, avance par cycle', clips[nom][3], '(hauteur du soldat = 1)')
@@ -45,13 +76,18 @@ out['anim'] = {'os': len(noms), 'images': len(lignes), 'clips': clips, 'table': 
 
 if a.fusil:
     f = Glb(a.fusil).maillage(); p = f['pos'].astype(np.float64); L = np.ptp(p[:, 0]); k = 1.9 / L # 1,52 m de fusil et sa baïonnette
-    ih = noms.index('mixamorig:RightHand'); G = sq.pose()[1]; main = G[ih][:3, 3]; bras = main - G[noms.index('mixamorig:RightForeArm')][:3, 3]; prise = main + bras / np.linalg.norm(bras) * 0.08
-    R = np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]], float) # bouche du canon (-x du modèle) vers l'avant du soldat (+z)
-    s, c = np.sin(np.radians(12)), np.cos(np.radians(12)); Tl = np.array([[1, 0, 0], [0, c, s], [0, -s, c]]) # bouche un peu relevée
-    centre = np.array([0.10 * L / 0.96, 0, 0]) # point tenu : un peu en arrière du milieu
-    f['pos'] = (((p - centre) * k) @ R.T @ Tl.T + prise).astype(np.float32); f['nor'] = (f['nor'].astype(np.float64) @ R.T @ Tl.T).astype(np.float32)
+    ih = noms.index('mixamorig:LeftHand'); Mf, Gf = sq.pose(fixes=FIXES); poignet = Gf[ih][:3, 3]
+    # bouche du canon (-x du modèle) vers le haut, sous-garde (-y) vers l'avant ; un peu penché en avant pour compenser le buste qui se cambre au repos
+    R = np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]], float)
+    s_, c_ = np.sin(np.radians(4)), np.cos(np.radians(4)); Tl = np.array([[1, 0, 0], [0, c_, -s_], [0, s_, c_]])
+    q = ((p - np.array([p[:, 0].max(), 0, 0])) * k) @ R.T @ Tl.T # crosse à l'origine
+    crosse = poignet + np.array([-0.01, -0.05, 0.05]) * haut / 1.75
+    pos_pose = q + crosse
+    # le fusil est habillé par la main gauche : on le ramène dans la pose de repos du modèle
+    Minv = np.linalg.inv(Mf[ih]); f['pos'] = (np.c_[pos_pose, np.ones(len(p))] @ Minv.T)[:, :3].astype(np.float32)
+    f['nor'] = (f['nor'].astype(np.float64) @ R.T @ Tl.T @ Minv[:3, :3].T); f['nor'] = (f['nor'] / np.linalg.norm(f['nor'], axis=1, keepdims=True)).astype(np.float32)
     f['os'] = np.zeros((len(p), 4), np.uint8); f['os'][:, 0] = ih; f['poids'] = np.zeros((len(p), 4), np.float32); f['poids'][:, 0] = 1
     print('fusil :', len(p), 'sommets,', len(f['idx']) // 3, 'triangles')
-    out['fusil'] = {'pres': paquet(f, alleger(f['pos'], f['idx'], 400, True)), 'loin': paquet(f, alleger(f['pos'], f['idx'], 60, True)), 'tex': texture(Glb(a.fusil), 256)}
+    out['fusil'] = {'pres': paquet(f, alleger(f['pos'], f['idx'], int(os.environ.get('FUSIL_PRES', 1200)), True)), 'loin': paquet(f, alleger(f['pos'], f['idx'], 60, True)), 'tex': texture(Glb(a.fusil), 256)}
 os.makedirs(os.path.join(racine, 'src/modeles'), exist_ok=True)
 ch = os.path.join(racine, f'src/modeles/{a.nom}.js'); open(ch, 'w').write('export default ' + json.dumps(out) + ';\n'); print('écrit', ch, os.path.getsize(ch) // 1024, 'Ko')
