@@ -9,10 +9,15 @@ Premier combat : feu de salve, pertes, moral, déroute, IA alliée minimale. Art
 ## Jouer
 Ouvrir `index.html` dans Chrome, Edge ou Firefox. La page contient tout, sans connexion.
 
+## Version Windows (.exe)
+Double-cliquer sur `construire-exe.bat` après chaque mise à jour du code (ou `npm install` puis `npm run exe`). Le jeu est réassemblé et le fichier `dist\The Eagle Rises.exe` est refait ; il se lance seul, sans installation. F11 : plein écran.
+
 ## Fichiers
 - `index.html` : le jeu, assemblé. Ne pas le modifier à la main.
 - `src/main.js` : le code de la bataille.
 - `src/page.html` : la page et l'interface.
+- `src/menu.js` : le menu principal (Échap pour y revenir).
+- `appli/` : la fenêtre du .exe (Electron).
 - `src/heights.js` : le relief, tiré des deux images de `donnees/`.
 - `modeles/` : les modèles Meshy d'origine (.glb).
 - `outils/convertir_modele.py` : prépare un soldat animé pour la foule, avec son fusil (`python3 outils/convertir_modele.py modeles/fantassin-francais-anime.glb fr --fusil modeles/fusil-1777.glb`), résultat dans `src/modeles/`. Demande Python avec numpy et Pillow.
