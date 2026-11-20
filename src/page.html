@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Eagle Rises — Pratzen, 2 décembre 1805</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#c9d6e2;font:14px/1.45 Georgia,'Times New Roman',serif;color:#f1e9d4;user-select:none}
+canvas{display:block}
+.p{position:fixed;background:rgba(24,28,36,.82);border:1px solid #8c7a4c;border-radius:4px;padding:10px 14px}
+#titre{top:12px;left:12px}#titre h1{margin:0;font-size:19px;letter-spacing:.5px;color:#f5d98a}#titre div{font-size:12.5px;opacity:.85}
+#stat{top:12px;right:12px;text-align:right;font-size:12.5px}#stat b{color:#f5d98a;font-size:15px}
+#bas{bottom:12px;left:12px;right:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+#sel{flex:1;min-width:220px}
+button,select{font:inherit;color:#f1e9d4;background:#3a3f4c;border:1px solid #8c7a4c;border-radius:3px;padding:5px 11px;cursor:pointer}
+button:hover{background:#4c5263}button.on{background:#8c7a4c;color:#14161b}
+#touches{top:84px;left:12px;font-size:12.5px;max-width:300px}#touches.cache{display:none}
+#touches td{padding:1px 8px 1px 0;vertical-align:top}#touches td:first-child{color:#f5d98a;white-space:nowrap}
+#box{position:fixed;display:none;border:1px solid #ffe08a;background:rgba(255,224,138,.12);pointer-events:none}
+</style></head><body>
+<div id="titre" class="p"><h1>The Eagle Rises</h1><div>Plateau de Pratzen · 2 décembre 1805 · relief réel</div></div>
+<div id="stat" class="p"><b id="fps">–</b> images/s<br><span id="nb"></span> soldats</div>
+<div id="touches" class="p"><table>
+<tr><td>Z Q S D</td><td>déplacer la caméra (Maj : plus vite)</td></tr>
+<tr><td>A / E</td><td>tourner</td></tr>
+<tr><td>Molette</td><td>zoom</td></tr>
+<tr><td>Clic molette</td><td>glisser pour tourner et incliner (ou Alt + clic gauche)</td></tr>
+<tr><td>Clic gauche</td><td>sélectionner, glisser pour un cadre, Maj pour ajouter</td></tr>
+<tr><td>Clic droit</td><td>ordre de marche</td></tr>
+<tr><td>1 / 2</td><td>ligne / colonne</td></tr>
+<tr><td>Espace</td><td>pause</td></tr></table></div>
+<div id="bas" class="p"><div id="sel"></div>
+<span><button id="ligne">Ligne</button> <button id="colonne">Colonne</button></span>
+<span>Temps <button data-v="0">❚❚</button> <button data-v="1">×1</button> <button data-v="4">×4</button> <button data-v="12">×12</button></span>
+<button id="brume" class="on">Brume</button>
+<label>Soldats par bataillon <select id="figs"><option>60</option><option selected>120</option><option>240</option><option>480</option></select></label>
+<button id="aide">Touches</button></div>
+<div id="box"></div>
+<script>/*BUNDLE*/</script></body></html>

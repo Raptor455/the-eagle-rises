@@ -1,0 +1,7 @@
+{
+  "name": "the-eagle-rises",
+  "private": true,
+  "description": "Batailles napoléoniennes en 3D : première démo, plateau de Pratzen (Austerlitz)",
+  "scripts": { "assembler": "node outils/assembler.js" },
+  "devDependencies": { "esbuild": "^0.25.0", "three": "^0.180.0" }
+}
