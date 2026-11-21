@@ -13,6 +13,7 @@ button,select{font:inherit;color:#f1e9d4;background:#3a3f4c;border:1px solid #8c
 button:hover{background:#4c5263}button.on{background:#8c7a4c;color:#14161b}
 #touches{top:84px;left:12px;font-size:12.5px;max-width:300px}#touches.cache{display:none}
 #touches td{padding:1px 8px 1px 0;vertical-align:top}#touches td:first-child{color:#f5d98a;white-space:nowrap}
+#fin b{color:#f5d98a;font-size:24px}
 #box{position:fixed;display:none;border:1px solid #ffe08a;background:rgba(255,224,138,.12);pointer-events:none}
 </style></head><body>
 <div id="titre" class="p"><h1>The Eagle Rises</h1><div>Plateau de Pratzen · 2 décembre 1805 · relief réel</div></div>
@@ -24,14 +25,18 @@ button:hover{background:#4c5263}button.on{background:#8c7a4c;color:#14161b}
 <tr><td>Clic molette</td><td>glisser pour tourner et incliner (ou Alt + clic gauche)</td></tr>
 <tr><td>Clic gauche</td><td>sélectionner, glisser pour un cadre, Maj pour ajouter</td></tr>
 <tr><td>Clic droit</td><td>ordre de marche</td></tr>
-<tr><td>1 / 2</td><td>ligne / colonne</td></tr>
+<tr><td>1 2 3 4</td><td>ligne, colonne, carré, tirailleurs (le changement prend 15 à 45 s)</td></tr>
+<tr><td>Clic droit sur l'ennemi</td><td>attaquer : marcher à portée et faire feu</td></tr>
+<tr><td>C ou Ctrl + clic droit</td><td>charger à la baïonnette (300 m au plus)</td></tr>
 <tr><td>Espace</td><td>pause</td></tr></table></div>
 <div id="bas" class="p"><div id="sel"></div>
-<span><button id="ligne">Ligne</button> <button id="colonne">Colonne</button></span>
+<span><button id="ligne">Ligne</button> <button id="colonne">Colonne</button> <button id="carre">Carré</button> <button id="tirailleurs">Tirailleurs</button> <button id="charger" title="Charger à la baïonnette (C)">Charger</button></span>
 <span>Temps <button data-v="0">❚❚</button> <button data-v="1">×1</button> <button data-v="4">×4</button> <button data-v="12">×12</button></span>
 <button id="brume" class="on">Brume</button>
 <button id="ia" class="on" title="Les Alliés sont commandés par l'ordinateur. Désactiver pour les commander aussi.">IA alliée</button>
 <label>Soldats par bataillon <select id="figs"><option>60</option><option selected>120</option><option>240</option><option>480</option></select></label>
 <button id="aide">Touches</button></div>
 <div id="box"></div>
+<div id="avis" class="p" style="display:none;bottom:84px;left:50%;transform:translateX(-50%);font-size:13px"></div>
+<div id="fin" class="p" style="display:none;top:30%;left:50%;transform:translateX(-50%);text-align:center;font-size:17px;padding:18px 30px;cursor:pointer"></div>
 <script>/*BUNDLE*/</script></body></html>
