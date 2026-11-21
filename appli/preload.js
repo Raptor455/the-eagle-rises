@@ -1,3 +1,6 @@
-// Donne au menu du jeu un bouton Quitter qui ferme vraiment l'application.
+// Donne au menu du jeu un bouton Quitter qui ferme vraiment l'application, et l'état de la mise à jour.
 const { contextBridge, ipcRenderer } = require('electron');
-contextBridge.exposeInMainWorld('eagle', { quitter: () => ipcRenderer.send('quitter') });
+contextBridge.exposeInMainWorld('eagle', {
+  quitter: () => ipcRenderer.send('quitter'),
+  etatMaj: () => ipcRenderer.invoke('etat-maj'),
+});

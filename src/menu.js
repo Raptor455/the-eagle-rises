@@ -23,6 +23,8 @@ const menu = document.getElementById('menu'), $ = id => document.getElementById(
 const appli = !!window.eagle; // lancé depuis le .exe (voir appli/main.js)
 if (!appli) $('m-quitter').style.display = 'none'; // un navigateur ne laisse pas une page se fermer seule
 let vitesse = '1', commence = false;
+window.eagle?.etatMaj?.().then(s => menu.querySelector('.cadre').insertAdjacentHTML('beforeend',
+  `<div class="bataille" style="opacity:.5;margin-top:8px">Jeu ${s}</div>`));
 
 function ouvrir() {
   const on = document.querySelector('[data-v].on'); if (on) vitesse = on.dataset.v;

@@ -12,6 +12,8 @@ Ouvrir `index.html` dans Chrome, Edge ou Firefox. La page contient tout, sans co
 ## Version Windows (.exe)
 Double-cliquer sur `construire-exe.bat` après chaque mise à jour du code (ou `npm install` puis `npm run exe`). Le jeu est réassemblé et le fichier `dist\The Eagle Rises.exe` est refait ; il se lance seul, sans installation. F11 : plein écran.
 
+À chaque lancement, le .exe télécharge le jeu de la branche main sur GitHub ; hors ligne, il garde la dernière version téléchargée. Il n'y a donc à refaire l'exe que si `appli/` change.
+
 ## Fichiers
 - `index.html` : le jeu, assemblé. Ne pas le modifier à la main.
 - `src/main.js` : le code de la bataille.
