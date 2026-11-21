@@ -34,7 +34,6 @@ Double-cliquer sur `construire-exe.bat` après chaque mise à jour du code (ou `
 - `src/page.html` : la page et l'interface.
 - `src/menu.js` : le menu principal (Échap pour y revenir).
 - `appli/` : la fenêtre du .exe (Electron).
-- `src/heights.js` : le relief, tiré des deux images de `donnees/`.
 - `src/carte.js` : la carte : sol, ruisseaux, étangs gelés, routes, villages, faisanderie, et `solAt(x, z)` qui donne la nature du sol (champ, route, eau, glace, village, bois).
 - `src/heights.js` : le relief et les ruisseaux, fabriqués par `python3 outils/relief.py` à partir des images de `donnees/` (les tuiles manquantes sont téléchargées).
 - `modeles/` : les modèles Meshy d'origine (.glb).
