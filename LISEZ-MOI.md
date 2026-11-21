@@ -54,5 +54,5 @@ Double-cliquer sur `construire-exe.bat` après chaque mise à jour du code (ou `
 
 ## À vérifier
 - L'ordre de bataille et les positions de départ sont provisoires.
-- Les villages, les routes, la faisanderie de Sokolnitz et les étangs de Satschan et de Menitz sont placés approximativement, à vérifier sur une carte d'époque.
+- Les villages sont à l'échelle 1/1 (maisons de 7 × 13 m tous les 16 m), mais leur nombre de maisons est un ordre de grandeur pour 1805 et le tracé des rues est inventé. Leur position, les routes, la faisanderie de Sokolnitz, les châteaux et les étangs sont placés approximativement, à vérifier sur une carte d'époque.
 - Tout est à l'échelle 1/1 : distances, relief et taille des soldats. `VE` (src/carte.js) et `SC` (src/main.js) permettent de regrossir le relief ou les figurines.
