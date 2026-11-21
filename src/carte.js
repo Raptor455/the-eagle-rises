@@ -7,7 +7,7 @@ import { HW, HH, H64, CADRE, RUISSEAUX } from './heights.js';
 import MAISON from './modeles/maison.js';
 import { objet } from './unites.js';
 
-export const TILE = CADRE.tuile, WX = (CADRE.x1 - CADRE.x0) * TILE, WZ = (CADRE.y1 - CADRE.y0) * TILE, VE = 2.5, H0 = 180;
+export const TILE = CADRE.tuile, WX = (CADRE.x1 - CADRE.x0) * TILE, WZ = (CADRE.y1 - CADRE.y0) * TILE, VE = 1, H0 = 180; // VE : grossissement du relief à l'affichage (1 = taille réelle)
 const N = 2 ** CADRE.z;
 export function ll(lat, lon) { // latitude, longitude -> position sur la carte (mètres, x vers l'est, z vers le sud)
   const tx = (lon + 180) / 360 * N, ty = (1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) / 2 * N;

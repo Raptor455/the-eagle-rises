@@ -44,7 +44,7 @@ const rnd = (a, b) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; 
 const { ground, labels } = construireCarte(scene, withMist);
 
 /* ===== SOLDATS : une figurine provisoire dessinée une fois, répétée par la carte graphique ===== */
-const SC = 1.5; // figurines un peu grossies pour rester lisibles
+const SC = 1; // taille des figurines (1 = taille réelle : un fantassin fait 1,80 m)
 function part(w, h, d, x, y, z, color) {
   const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z);
   const c = new THREE.Color(color), n = g.attributes.position.count, a = new Float32Array(n * 3);
