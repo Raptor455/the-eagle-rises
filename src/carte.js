@@ -4,6 +4,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { HW, HH, H64, CADRE, RUISSEAUX } from './heights.js';
+import MAISON from './modeles/maison.js';
+import { objet } from './unites.js';
 
 export const TILE = CADRE.tuile, WX = (CADRE.x1 - CADRE.x0) * TILE, WZ = (CADRE.y1 - CADRE.y0) * TILE, VE = 2.5, H0 = 180;
 const N = 2 ** CADRE.z;
@@ -127,8 +129,7 @@ export function construireCarte(scene, withMist) {
   scene.add(new THREE.Mesh(mergeGeometries(chemins), matRuban(withMist, 0x7d6f58)));
 
   /* villages : maisons blanchies, pignon sur rue, de part et d'autre de la rue principale qui suit la pente douce */
-  const W = 0xe6e0d0, gMaison = mergeGeometries([boite(7, 4.2, 13, 0, 2.1, 0, W), toit(7, 4.6, 13, 4.2, 0xffffff)]);
-  const nRoof = toit(7, 4.6, 13, 4.2, 0).attributes.position.count, nMur = gMaison.attributes.position.count - nRoof;
+  const W = 0xe6e0d0;
   const gEglise = mergeGeometries([boite(10, 8, 22, 0, 4, 0, W), toit(10, 5, 22, 8, 0x6e3b2a), boite(6, 20, 6, 0, 10, -13, W), boite(6.4, 6, 6.4, 0, 22, -13, 0x4e5a52)]);
   const maisons = [], eglises = [], arbres = [];
   for (const v of VILLAGES) {
@@ -144,7 +145,7 @@ export function construireCarte(scene, withMist) {
       const ox = dx * t - dz * cote * (11 + (rang - 1) * 24 + rnd(k, 3) * 3), oz = dz * t + dx * cote * (11 + (rang - 1) * 24 + rnd(k, 3) * 3);
       const x = cx + ox + Math.sin(t / v.long * 3 + cx) * v.long * 0.04 * -dz, z = cz + oz + Math.sin(t / v.long * 3 + cx) * v.long * 0.04 * dx;
       if (solAt(x, z) === 'eau' || solAt(x, z) === 'route' || maisons.some(m => Math.hypot(m.x - x, m.z - z) < 13)) continue;
-      maisons.push({ x, z, a: ang + (rnd(x, z) - 0.5) * 0.12, y: Math.min(yAt(x - 4, z - 6), yAt(x + 4, z + 6), yAt(x, z)), c: rnd(z, x) });
+      maisons.push({ x, z, a: ang + (rnd(x, z) - 0.5) * 0.12, y: Math.min(yAt(x - 4, z - 6), yAt(x + 4, z + 6), yAt(x, z)), c: rnd(z, x), v: VILLAGES.indexOf(v) });
       marque(x, z, 9, 'village'); placees++;
       if (rnd(x, k) < 0.45) arbres.push([x - dz * cote * 16 + (rnd(k, 9) - 0.5) * 10, z + dx * cote * 16 + (rnd(9, k) - 0.5) * 10, 0.8]); // vergers derrière les maisons
     }
@@ -155,15 +156,13 @@ export function construireCarte(scene, withMist) {
 
   const matBati = withMist(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
   const mM = new THREE.Matrix4(), mQ = new THREE.Quaternion(), mV = new THREE.Vector3(), mS = new THREE.Vector3(1, 1, 1), Y = new THREE.Vector3(0, 1, 0), col = new THREE.Color();
-  { // toit de chaume ou de tuiles : la couleur d'instance ne teinte que le toit (les murs restent blancs)
-    const g = gMaison.clone(), tc = new Float32Array(g.attributes.position.count); for (let i = nMur; i < tc.length; i++) tc[i] = 1;
-    g.setAttribute('aToit', new THREE.BufferAttribute(tc, 1));
-    const mat = withMist(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
-    const avant = mat.onBeforeCompile; mat.customProgramCacheKey = () => 'maison';
-    mat.onBeforeCompile = sh => { avant(sh); sh.vertexShader = sh.vertexShader.replace('#include <color_vertex>', '#include <color_vertex>\n#ifdef USE_INSTANCING_COLOR\nvColor.rgb = mix(color.rgb, instanceColor.rgb, aToit);\n#endif').replace('#include <common>', '#include <common>\nattribute float aToit;'); };
-    const im = new THREE.InstancedMesh(g, mat, maisons.length);
-    maisons.forEach((m, i) => { mQ.setFromAxisAngle(Y, -m.a); im.setMatrixAt(i, mM.compose(mV.set(m.x, m.y, m.z), mQ, mS)); im.setColorAt(i, m.c < 0.55 ? col.setHex(0x9a8458).multiplyScalar(0.85 + m.c * 0.3) : col.setHex(0x8e4a34).multiplyScalar(0.8 + m.c * 0.3)); });
-    scene.add(im);
+  const prochesMaj = []; // maisons : le modèle détaillé près de la caméra, la version à 18 triangles au loin, village par village
+  { const M = objet(MAISON, withMist);
+    VILLAGES.forEach((v, vi) => { const ms = maisons.filter(m => m.v === vi); if (!ms.length) return;
+      const paire = [M.loin, M.pres].map(g => { const im = new THREE.InstancedMesh(g, M.mat, ms.length);
+        ms.forEach((m, i) => { mQ.setFromAxisAngle(Y, -m.a); im.setMatrixAt(i, mM.compose(mV.set(m.x, m.y, m.z), mQ, mS)); im.setColorAt(i, col.setScalar(0.82 + m.c * 0.3)); });
+        im.computeBoundingSphere(); scene.add(im); return im; });
+      paire[1].visible = false; prochesMaj.push({ x: v.x, z: v.z, y: yAt(v.x, v.z), r: 320 + v.long / 2, loin: paire[0], pres: paire[1] }); });
   }
   { const im = new THREE.InstancedMesh(gEglise, matBati, eglises.length); eglises.forEach((m, i) => { mQ.setFromAxisAngle(Y, -m.a + Math.PI / 2); im.setMatrixAt(i, mM.compose(mV.set(m.x, m.y, m.z), mQ, mS)); }); scene.add(im); }
 
@@ -270,5 +269,6 @@ vec3 lin(vec3 c){ return pow(c, vec3(2.2)); }`)
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize(normal + (viewMatrix * vec4(solBosse, 0.0)).xyz);');
   };
   const ground = new THREE.Mesh(g, mat); scene.add(ground);
+  ground.onBeforeRender = (_r, _s, cam) => { for (const v of prochesMaj) { const p = Math.hypot(cam.position.x - v.x, cam.position.y - v.y, cam.position.z - v.z) < v.r; v.pres.visible = p; v.loin.visible = !p; } };
   return { ground, labels };
 }
