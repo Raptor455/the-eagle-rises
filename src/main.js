@@ -102,6 +102,8 @@ const gRest = mergeGeometries([
 ]);
 gCoat.scale(SC, SC, SC); gRest.scale(SC, SC, SC);
 /* cavalier provisoire dessiné en code, en attendant le modèle : l'avant est vers -z */
+/* très loin (au-delà de LOIN_DIST) : un soldat n'occupe qu'un ou deux pixels, une silhouette de 12 triangles suffit */
+const LOIN_DIST = 650, gLoin = part(0.55, 1.8, 0.4, 0, 0.9, 0, 0xffffff), gLoinCav = part(0.7, 2.6, 2.4, 0, 1.3, 0, 0xffffff); gLoin.scale(SC, SC, SC); gLoinCav.scale(SC, SC, SC);
 const gCavCoat = mergeGeometries([part(0.46, 0.62, 0.32, 0, 2.25, 0.1, 0xffffff), part(0.13, 0.5, 0.13, 0.3, 2.25, 0.05, 0xffffff), part(0.13, 0.5, 0.13, -0.3, 2.25, 0.05, 0xffffff)]);
 const gCavRest = mergeGeometries([
   part(0.56, 0.72, 2.0, 0, 1.38, 0, 0x5b3a22), part(0.32, 0.75, 0.4, 0, 1.9, -0.95, 0x5b3a22), part(0.24, 0.28, 0.62, 0, 2.2, -1.25, 0x4a2e1a), // corps, encolure, tête du cheval
@@ -170,7 +172,7 @@ function modele(D) { // soldat animé : corps et fusil partagent le même squele
 }
 const MODELES = { fr: modele(FR) }; // les autres camps gardent la figurine provisoire
 
-let sold, pools = [], provisoire, cavaliers; // sold : x, z, décalage de pas par figurine
+let sold, pools = [], provisoire, cavaliers, lointains; // sold : x, z, décalage de pas par figurine
 const matCoat = withMist(new THREE.MeshLambertMaterial({ vertexColors: true })), matRest = withMist(new THREE.MeshLambertMaterial({ vertexColors: true }));
 const POSTES = [[-1.3, 1.6], [1.3, 1.6], [-1.6, 3.2], [1.6, 3.2], [0, 4.8], [0.6, 7]]; // servants autour de leur pièce
 function slot(r, k, out) { // place de la figurine k dans la formation, repère du bataillon (x : front, z : profondeur)
@@ -211,7 +213,9 @@ function build() {
   const nP = Math.max(1, somme(r => !MODELES[r.camp] && aPied(r))), nC = Math.max(1, somme(r => !aPied(r)));
   provisoire = pool([new THREE.InstancedMesh(gCoat, matCoat, nP), new THREE.InstancedMesh(gRest, matRest, nP)]); provisoire.coul = true;
   cavaliers = pool([new THREE.InstancedMesh(gCavCoat, matCoat, nC), new THREE.InstancedMesh(gCavRest, matRest, nC)]); cavaliers.coul = true;
-  [provisoire, cavaliers].forEach(p => { p.meshes[0].setColorAt(0, new THREE.Color()); p.C = p.meshes[0].instanceColor.array; });
+  lointains = pool([new THREE.InstancedMesh(gLoin, matCoat, Math.max(1, somme(r => aPied(r))))]); lointains.coul = true;
+  lointains.cav = pool([new THREE.InstancedMesh(gLoinCav, matCoat, nC)]); lointains.cav.coul = true;
+  [provisoire, cavaliers, lointains, lointains.cav].forEach(p => { p.meshes[0].setColorAt(0, new THREE.Color()); p.C = p.meshes[0].instanceColor.array; });
   regs.forEach((r, ri) => { for (let k = 0; k < r.max; k++) { const i = r.f0 + k;
     sold[i * 3] = r.x; sold[i * 3 + 1] = r.z; sold[i * 3 + 2] = rnd(i, 7); } r.snap = true; // position, et où en est le pas
     r.arrivee = (r.opts.arrivee || 0) * 60; r.reserve = r.arrivee > 0; // renfort : absent jusqu'à son heure
@@ -506,9 +510,10 @@ function combat(r, dt) {
 }
 
 /* ===== SIMULATION : on déplace le bataillon, les figurines rejoignent leur place ===== */
-const tmp = [0, 0, 0]; let tAnim = 0;
+const tmp = [0, 0, 0]; let tAnim = 0; const champ = new THREE.Frustum(), mChamp = new THREE.Matrix4(), sphere = new THREE.Sphere();
 function sim(dt) {
   const t = performance.now() / 1000; pools.forEach(p => p.n = 0);
+  camera.updateMatrixWorld(); champ.setFromProjectionMatrix(mChamp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
   if (speed > 0) tAnim += dt / speed * Math.min(speed, 2.5); // les jambes ne s'emballent pas en accéléré
   horloge += dt;
   regs.forEach((r, ri) => {
@@ -530,9 +535,12 @@ function sim(dt) {
       else if (d > 0.5) { const st = Math.min(d, v * dt * (Math.abs(da) > 0.6 && !r.charge ? 0.3 : 1)); r.x += dx / d * st; r.z += dz / d * st; avance = true; }
       else if (fuite || Math.abs(da) < 0.01) r.moving = false;
     }
-    const cav = r.type === 'cav', cs = Math.cos(r.face), sn = Math.sin(r.face), vmax = (cav ? (r.charge ? 9 : fuite ? 7 : 4.5) : fuite || r.charge ? 4.2 : 2.6) * dt, md = cav ? null : MODELES[r.camp], course = fuite || (r.charge && r.dEnn < ELAN);
-    const P = cav ? cavaliers : !md ? provisoire : Math.hypot(camera.position.x - r.x, camera.position.z - r.z, camera.position.y - yAt(r.x, r.z)) < LOD_DIST ? md.pPres : md.pLoin, M = P.M;
-    for (let k = 0; k < r.n; k++) {
+    const cav = r.type === 'cav', cs = Math.cos(r.face), sn = Math.sin(r.face), vmax = (cav ? (r.charge ? 9 : fuite ? 7 : 4.5) : fuite || r.charge ? 4.2 : 2.6) * dt, course = fuite || (r.charge && r.dEnn < ELAN);
+    const dCam = Math.hypot(camera.position.x - r.x, camera.position.z - r.z, camera.position.y - yAt(r.x, r.z)), loin = dCam > LOIN_DIST;
+    const md = cav || loin ? null : MODELES[r.camp], P = loin ? (cav ? lointains.cav : lointains) : cav ? cavaliers : !md ? provisoire : dCam < LOD_DIST ? md.pPres : md.pLoin, M = P.M;
+    sphere.center.set(r.x, yAt(r.x, r.z), r.z); sphere.radius = (r.type === 'art' ? 60 : front(r) / 2 + 40) * (fuite ? 2 : 1);
+    const vu = champ.intersectsSphere(sphere); if (!vu) r.snap = true; // hors du champ de la caméra : rien à dessiner, les hommes reprendront leur place en revenant
+    for (let k = 0; vu && k < r.n; k++) {
       const i = r.f0 + k; slot(r, k, tmp); const tourne = tmp[2]; if (fuite) { tmp[0] += (rnd(i, 11) - 0.5) * 9; tmp[1] += (rnd(i, 13) - 0.5) * 9; }
       if (r.melee) { tmp[0] += Math.sin(t * 0.9 + rnd(i, 17) * 6.3) * 1.6; tmp[1] += Math.sin(t * 1.3 + rnd(i, 19) * 6.3) * 1.6 - 3; } // mêlée : les rangs se brisent et se poussent
       toWorld(r, tmp[0], tmp[1], tmp);
@@ -550,7 +558,7 @@ function sim(dt) {
       M[o] = fc; M[o + 1] = 0; M[o + 2] = fs; M[o + 3] = 0; M[o + 4] = 0; M[o + 5] = 1; M[o + 6] = 0; M[o + 7] = 0;
       M[o + 8] = -fs; M[o + 9] = 0; M[o + 10] = fc; M[o + 11] = 0; M[o + 12] = x; M[o + 13] = yAt(x, z) + bob; M[o + 14] = z; M[o + 15] = 1;
     }
-    r.snap = false;
+    if (vu) r.snap = false;
     const gy = yAt(r.x, r.z); r.flag.position.set(r.x, gy, r.z); r.flag.rotation.y = -r.face;
     if (r.type === 'art') for (let g = 0; g < r.pieces; g++) { toWorld(r, (g - (r.pieces - 1) / 2) * ECART_PIECES, 0, tmp); mE.set(0, -r.face, 0); mQ.setFromEuler(mE); mV.set(tmp[0], yAt(tmp[0], tmp[1]), tmp[1]); canons.setMatrixAt(r.canon0 + g, mM.compose(mV, mQ, mS)); }
     const rad = r.type === 'art' ? 36 : r.form === 'colonne' ? 22 : r.form === 'carre' ? front(r) * 0.75 + 6 : front(r) / 2 + 8; r.ring.visible = r.sel; r.ring.position.set(r.x, gy + 1.5, r.z); r.ring.scale.set(rad, 1, rad);
