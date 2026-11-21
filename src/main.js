@@ -1,23 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { HW, HH, H64 } from './heights.js';
+import { WX, WZ, VE, H0, ll, altAt, yAt, solAt, construireCarte } from './carte.js';
 import FR from './modeles/fr.js';
-
-/* ===== TERRAIN : relief réel (tuiles 12/2238/1404 et 12/2239/1404) ===== */
-const TILE = 6403, WX = TILE * 2, WZ = TILE, VE = 2.5, H0 = 180;
-const LON0 = 2238 / 4096 * 360 - 180, LONW = 2 / 4096 * 360;
-const hRaw = (() => { const b = atob(H64), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new Uint16Array(u.buffer); })();
-const alt = (i, j) => hRaw[Math.min(HH - 1, Math.max(0, j)) * HW + Math.min(HW - 1, Math.max(0, i))] / 10;
-function altAt(x, z) { // altitude réelle en mètres
-  const fx = (x / WX + 0.5) * (HW - 1), fz = (z / WZ + 0.5) * (HH - 1);
-  const i = Math.floor(fx), j = Math.floor(fz), a = fx - i, b = fz - j;
-  return (alt(i, j) * (1 - a) + alt(i + 1, j) * a) * (1 - b) + (alt(i, j + 1) * (1 - a) + alt(i + 1, j + 1) * a) * b;
-}
-const yAt = (x, z) => (altAt(x, z) - H0) * VE;
-function ll(lat, lon) { // latitude, longitude -> position sur la carte
-  const ty = (1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) / 2 * 4096;
-  return [((lon - LON0) / LONW - 0.5) * WX, (ty - 1404 - 0.5) * WZ];
-}
 
 /* ===== SCÈNE ===== */
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -50,40 +34,9 @@ mat4 osM(float j, float l){ int x=int(j+0.5)*3, y=int(l+0.5); vec4 a=texelFetch(
   return mat;
 }
 
-/* sol : couleurs d'hiver, parcelles de champs, givre sur les hauteurs */
+/* sol, eau, routes, villages et repères : voir src/carte.js */
 const rnd = (a, b) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); };
-{
-  const g = new THREE.PlaneGeometry(WX, WZ, HW - 1, HH - 1); g.rotateX(-Math.PI / 2);
-  const p = g.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
-  const pre = new THREE.Color(0x6f7d55), labour = new THREE.Color(0x7a6a52), chaume = new THREE.Color(0x9c9068), givre = new THREE.Color(0xdfe5e4), humide = new THREE.Color(0x586650);
-  for (let k = 0; k < p.count; k++) {
-    const x = p.getX(k), z = p.getZ(k), a = altAt(x, z); p.setY(k, (a - H0) * VE);
-    const ang = 0.5, u = x * Math.cos(ang) + z * Math.sin(ang), v = -x * Math.sin(ang) + z * Math.cos(ang);
-    const r = rnd(Math.floor(u / 210), Math.floor(v / 140));
-    c.copy(r < 0.4 ? labour : r < 0.7 ? chaume : pre);
-    const pente = Math.hypot(altAt(x + 25, z) - altAt(x - 25, z), altAt(x, z + 25) - altAt(x, z - 25)) / 50;
-    if (pente > 0.09) c.lerp(pre, Math.min(1, (pente - 0.09) * 9));
-    if (a < 205) c.lerp(humide, Math.min(1, (205 - a) / 12));
-    c.lerp(givre, Math.max(0, Math.min(0.55, (a - 235) / 110)) + 0.08);
-    c.multiplyScalar(0.9 + rnd(x, z) * 0.2);
-    col[k * 3] = c.r; col[k * 3 + 1] = c.g; col[k * 3 + 2] = c.b;
-  }
-  g.setAttribute('color', new THREE.BufferAttribute(col, 3)); g.computeVertexNormals();
-  var ground = new THREE.Mesh(g, withMist(new THREE.MeshLambertMaterial({ vertexColors: true })));
-  scene.add(ground);
-}
-
-/* repères */
-const labels = [];
-function label(txt, lat, lon, big) {
-  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 96; const x = cv.getContext('2d');
-  x.font = (big ? 'bold ' : '') + '52px Georgia,serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
-  x.lineWidth = 8; x.strokeStyle = 'rgba(20,24,30,.85)'; x.strokeText(txt, 256, 48); x.fillStyle = '#f4ecd6'; x.fillText(txt, 256, 48);
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), depthTest: false, fog: false, transparent: true }));
-  const [px, pz] = ll(lat, lon); s.position.set(px, yAt(px, pz) + 60, pz); s.renderOrder = 5; scene.add(s); labels.push(s);
-}
-label('Pratzeberg', 49.1278, 16.7634, true); label('Pratzen', 49.141, 16.766); label('Kobelnitz', 49.138, 16.732);
-label('Puntowitz', 49.150, 16.742); label('Sokolnitz', 49.114, 16.722); label('Telnitz', 49.102, 16.718); label('Aujezd', 49.105, 16.757);
+const { ground, labels } = construireCarte(scene, withMist);
 
 /* ===== SOLDATS : une figurine provisoire dessinée une fois, répétée par la carte graphique ===== */
 const SC = 1.5; // figurines un peu grossies pour rester lisibles
@@ -428,5 +381,5 @@ function loop(now) {
   fN++; fT += real; if (fT > 0.5) { document.getElementById('fps').textContent = Math.round(fN / fT); fN = 0; fT = 0; hud(); }
   requestAnimationFrame(loop);
 }
-window.__jeu = { regs, cam, order, ll, yAt, setForm };
+window.__jeu = { regs, cam, order, ll, yAt, solAt, setForm };
 requestAnimationFrame(loop);
