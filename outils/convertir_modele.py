@@ -17,7 +17,7 @@ ap.add_argument('--clips', help="animations : nom=mot:images par seconde, sépar
 ap.add_argument('--pres', type=int, help='triangles de la version de près (par défaut : le modèle entier)'); ap.add_argument('--loin', type=int, default=420, help='triangles de la version de loin')
 ap.add_argument('--selle', help="x,y,z : décalage du modèle, en hauteurs du modèle (cavalier assis sur le dos du cheval)"); a = ap.parse_args()
 # nom dans le jeu : (mot cherché dans le nom du clip, images par seconde)
-CLIPS = {'marche': ('walking', 24), 'course': ('running', 24), 'attente': ('idle', 10), 'tir': ('shooting', 20)}
+CLIPS = {'marche': ('walking', 24), 'course': ('running', 24), 'attente': ('idle', 10)}
 if a.clips: CLIPS = {n: (v.split(':')[0], int(v.split(':')[1]), *([tuple(map(float, v.split(':')[2].split('-')))] if v.count(':') > 1 else [])) for n, v in (c.split('=') for c in a.clips.split(','))} # mot:ips[:début-fin en s]
 
 b64 = lambda x: base64.b64encode(x.tobytes()).decode()
@@ -75,38 +75,79 @@ if not a.sans_port:
 print('soldat :', len(m['pos']), 'sommets,', len(m['idx']) // 3, 'triangles, hauteur', round(haut, 3), ',', len(noms), 'os')
 out = {'pres': paquet(m, m['idx']), 'loin': paquet(m, alleger(m['pos'], m['idx'], a.loin, uv=m['uv'] if a.pres else None)), 'tex': texture(g, 1024), 'haut': round(haut, 4)}
 
-# animations : le jeu veut un soldat de hauteur 1, pieds au sol, qui regarde vers -z
-N = np.diag([-1 / haut, 1 / haut, -1 / haut, 1.0]) @ np.array([[1, 0, 0, 0], [0, 1, 0, -Y0], [0, 0, 1, 0], [0, 0, 0, 1.0]]) # sol à y = 0
-if a.selle: S = np.eye(4); S[:3, 3] = [float(v) for v in a.selle.split(',')]; N = S @ N # en hauteurs du modèle, dans le repère du jeu (avant : -z)
-lignes = []; clips = {}
-for nom, (mot, ips, *plage) in CLIPS.items():
-    c = next((k for k in sq.clips if mot in k.lower()), None)
-    if not c: print('  animation absente :', nom); continue
-    t0, t1 = plage[0] if plage else (0, sq.duree(c)); d = t1 - t0; n = max(2, int(round(d * ips))); clips[nom] = [len(lignes), n, n / d]
-    for i in range(n): lignes.append((N @ sq.pose(c, t0 + d * i / n, FIXES)[0])[:, :3, :])
-    # chemin parcouru par cycle : à chaque image, le pied le plus bas est posé et recule sous le corps d'autant que le soldat avance
-    PIEDS = [k for k, nm in enumerate(noms) if nm.lower().endswith('foot') or nm.lower().split('.')[0].endswith('foot')] # deux pieds, ou quatre sabots
-    pieds = np.array([[(N @ sq.pose(c, t0 + d * i / n, FIXES)[1][k])[:3, 3] for k in PIEDS] for i in range(n + 1)])
-    pas = sum(abs(pieds[i + 1, k, 2] - pieds[i, k, 2]) for i in range(n) for k in [int(np.argmin((pieds[i, :, 1] + pieds[i + 1, :, 1])))])
-    clips[nom].append(round(float(pas), 4))
-    print('  animation', nom, '<-', c, ':', n, 'images, avance par cycle', clips[nom][3], '(hauteur du soldat = 1)')
-T = np.stack(lignes).astype(np.float16) # images x os x 3 lignes x 4
-out['anim'] = {'os': len(noms), 'images': len(lignes), 'clips': clips, 'table': b64(T)}
-
+# FUSIL : il a son propre os (après ceux du squelette), et la baguette aussi. Au port d'arme, le fusil suit la main gauche,
+# vertical contre l'épaule ; dans les gestes (outils/gestes.py : charge en douze temps, joue, feu, baïonnette), il est posé
+# à la main et les bras vont le chercher.
+from gestes import Gestes, suites, rot_pure, m4
+GESTES = a.fusil and not a.sans_port
 if a.fusil:
     f = Glb(a.fusil).maillage(); p = f['pos'].astype(np.float64); L = np.ptp(p[:, 0]); k = 1.9 / L # 1,52 m de fusil et sa baïonnette
     ih = noms.index('mixamorig:LeftHand'); Mf, Gf = sq.pose(fixes=FIXES); poignet = Gf[ih][:3, 3]
-    # bouche du canon (-x du modèle) vers le haut, sous-garde (-y) vers l'avant ; un peu penché en avant pour compenser le buste qui se cambre au repos
+    # repère du fusil : crosse à l'origine, bouche du canon (-x du modèle) vers +y, sous-garde (-y) vers +z ; au port d'arme,
+    # vertical, un peu penché en avant pour compenser le buste qui se cambre au repos
     R = np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]], float)
     s_, c_ = np.sin(np.radians(4)), np.cos(np.radians(4)); Tl = np.array([[1, 0, 0], [0, c_, -s_], [0, s_, c_]])
-    q = ((p - np.array([p[:, 0].max(), 0, 0])) * k) @ R.T @ Tl.T # crosse à l'origine
     crosse = poignet + np.array([-0.01, -0.05, 0.05]) * haut / 1.75
-    pos_pose = q + crosse
-    # le fusil est habillé par la main gauche : on le ramène dans la pose de repos du modèle
-    Minv = np.linalg.inv(Mf[ih]); f['pos'] = (np.c_[pos_pose, np.ones(len(p))] @ Minv.T)[:, :3].astype(np.float32)
-    f['nor'] = (f['nor'].astype(np.float64) @ R.T @ Tl.T @ Minv[:3, :3].T); f['nor'] = (f['nor'] / np.linalg.norm(f['nor'], axis=1, keepdims=True)).astype(np.float32)
-    f['os'] = np.zeros((len(p), 4), np.uint8); f['os'][:, 0] = ih; f['poids'] = np.zeros((len(p), 4), np.float32); f['poids'][:, 0] = 1
+    FUSIL_PORT = np.linalg.inv(Gf[ih]) @ m4(Tl, crosse) # dans le repère de la main gauche
+    f['pos'] = (((p - np.array([p[:, 0].max(), 0, 0])) * k) @ R.T).astype(np.float32)
+    f['nor'] = f['nor'].astype(np.float64) @ R.T; f['nor'] = (f['nor'] / np.linalg.norm(f['nor'], axis=1, keepdims=True)).astype(np.float32)
+    f['os'] = np.zeros((len(p), 4), np.uint8); f['os'][:, 0] = len(noms); f['poids'] = np.zeros((len(p), 4), np.float32); f['poids'][:, 0] = 1
     print('fusil :', len(p), 'sommets,', len(f['idx']) // 3, 'triangles')
-    out['fusil'] = {'pres': paquet(f, alleger(f['pos'], f['idx'], int(os.environ.get('FUSIL_PRES', 1200)), True)), 'loin': paquet(f, alleger(f['pos'], f['idx'], 60, True)), 'tex': texture(Glb(a.fusil), 256)}
+    # baguette : un fin cylindre d'acier (tête à l'origine, vers +y), couleur prise sur la baïonnette
+    nb, ray, LB = 6, 0.0055, 1.1; a_ = np.arange(nb) * 2 * np.pi / nb
+    bpos = np.array([[ray * np.cos(t), y, ray * np.sin(t)] for y in (0, LB) for t in a_], np.float32)
+    bnor = np.array([[np.cos(t), 0, np.sin(t)] for y in (0, LB) for t in a_], np.float32)
+    bidx = np.array([[i, (i + 1) % nb, nb + i, (i + 1) % nb, nb + (i + 1) % nb, nb + i] for i in range(nb)], np.uint32).ravel()
+    sel = f['pos'][:, 1] > 1.5; buv = np.repeat(np.median(f['uv'][sel], 0)[None], 2 * nb, 0).astype(np.float32)
+    bag = {'pos': bpos, 'nor': bnor, 'uv': buv, 'os': np.tile([len(noms) + 1, 0, 0, 0], (2 * nb, 1)).astype(np.uint8), 'poids': np.tile([1, 0, 0, 0], (2 * nb, 1)).astype(np.float32)}
+    def avec_baguette(idx):
+        n0 = len(f['pos']); fb = {c: np.concatenate([f[c], bag[c]]) for c in ('pos', 'nor', 'uv', 'os', 'poids')}
+        return paquet(fb, np.concatenate([idx, bidx + n0]))
+    out['fusil'] = {'pres': avec_baguette(alleger(f['pos'], f['idx'], int(os.environ.get('FUSIL_PRES', 1200)), True)), 'loin': paquet(f, alleger(f['pos'], f['idx'], 60, True)), 'tex': texture(Glb(a.fusil), 256)}
+
+# animations : le jeu veut un soldat de hauteur 1, pieds au sol, qui regarde vers -z
+N = np.diag([-1 / haut, 1 / haut, -1 / haut, 1.0]) @ np.array([[1, 0, 0, 0], [0, 1, 0, -Y0], [0, 0, 1, 0], [0, 0, 0, 1.0]]) # sol à y = 0
+if a.selle: S = np.eye(4); S[:3, 3] = [float(v) for v in a.selle.split(',')]; N = S @ N # en hauteurs du modèle, dans le repère du jeu (avant : -z)
+if a.fusil: GE = Gestes(sq, noms, FIXES, FUSIL_PORT)
+def ligne(G):
+    """Une image de la table : les os, puis le fusil et la baguette."""
+    M, Gos = sq.habillage(G); M = list(M)
+    if a.fusil:
+        F, B = G['fusil'], G['baguette']; M += [F, B]
+    return (N @ np.stack(M))[:, :3, :], Gos
+def au_port(G):
+    F = G[sq.os[ih]] @ FUSIL_PORT; F = m4(rot_pure(F), F[:3, 3]); G['fusil'] = F; G['baguette'] = GE.baguette('r', F, None); return G
+PIEDS = [k for k, nm in enumerate(noms) if nm.lower().endswith('foot') or nm.lower().split('.')[0].endswith('foot')] # deux pieds, ou quatre sabots
+def chemin(Gs):
+    """Chemin parcouru par cycle : à chaque image, le pied le plus bas est posé et recule sous le corps d'autant que le soldat avance."""
+    pieds = np.array([[(N @ g[k])[:3, 3] for k in PIEDS] for g in Gs]); n = len(Gs) - 1
+    return round(float(sum(abs(pieds[i + 1, k, 2] - pieds[i, k, 2]) for i in range(n) for k in [int(np.argmin((pieds[i, :, 1] + pieds[i + 1, :, 1])))])), 4)
+lignes = []; clips = {}; BASE = {}
+for nom, (mot, ips, *plage) in CLIPS.items():
+    c = next((k for k in sq.clips if mot in k.lower()), None)
+    if not c: print('  animation absente :', nom); continue
+    t0, t1 = plage[0] if plage else (0, sq.duree(c)); d = t1 - t0; n = max(2, int(round(d * ips))); clips[nom] = [len(lignes), n, n / d]; BASE[nom] = (c, t0, d, n)
+    Gs = []
+    for i in range(n + 1):
+        G = sq.globaux(sq.locaux(c, t0 + d * i / n, FIXES))
+        if a.fusil: G = au_port(G)
+        L_, Gos = ligne(G); Gs.append(Gos)
+        if i < n: lignes.append(L_)
+    clips[nom].append(chemin(Gs))
+    print('  animation', nom, '<-', c, ':', n, 'images, avance par cycle', clips[nom][3], '(hauteur du soldat = 1)')
+if GESTES:
+    for nom, (cles, ips, duree, corps, boucle) in suites().items():
+        if corps: c, t0, d, n = BASE[corps]
+        else: c, t0, d = None, 0, duree; n = max(2, int(round(d * ips)))
+        Gs = []; pire = 0; clips[nom] = [len(lignes), n, (n if boucle else n - 1) / d]
+        for i in range(n + 1 if corps else n):
+            t = d * i / (n if boucle else n - 1)
+            G, F, B, e = GE.image(cles, 0 if corps else t, c, t0 + t if corps else 0); G['fusil'], G['baguette'] = F, B; pire = max(pire, e)
+            L_, Gos = ligne(G); Gs.append(Gos)
+            if i < n: lignes.append(L_)
+        clips[nom].append(chemin(Gs) if corps else 0)
+        print('  geste', nom, ':', n, 'images', ('(corps : ' + corps + ')') if corps else '', '; main la plus loin de sa prise :', round(pire * 100), 'cm')
+T = np.stack(lignes).astype(np.float16) # images x os x 3 lignes x 4
+out['anim'] = {'os': len(noms) + (2 if a.fusil else 0), 'images': len(lignes), 'clips': clips, 'table': b64(T)}
 os.makedirs(os.path.join(racine, 'src/modeles'), exist_ok=True)
 ch = os.path.join(racine, f'src/modeles/{a.nom}.js'); open(ch, 'w').write('export default ' + json.dumps(out) + ';\n'); print('écrit', ch, os.path.getsize(ch) // 1024, 'Ko')

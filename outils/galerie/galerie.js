@@ -33,6 +33,8 @@ function groupe(D, haut, places, clipDe, robe) {
     places.forEach(([x, z], k) => { const o = new THREE.Object3D(); o.position.set(x, 0, z); o.updateMatrix(); im.setMatrixAt(k, o.matrix); }); });
   groupes.push({ M, lignes, n: places.length, clipDe });
 }
+if (q.get('seul')) groupe(FR, HAUT, [[0, 0]], c => c); // ?seul=1 : un fantassin français, seul au centre
+else {
 // fantassins : trois par camp
 [FR, RU, AU].forEach((D, ci) => groupe(D, HAUT, [-1, 0, 1].map(k => [(ci - 1) * 2.4 + k * 0.75, k === 0 ? -0.5 : 0]), c => c));
 // cavaliers sur leur cheval, devant : cuirassier (grosse cavalerie : robe sombre), Russe, Autrichien, cosaque
@@ -42,15 +44,26 @@ CAV.forEach(([C, robe], i) => { const p = [[(i - 1.5) * 3, -7]]; groupe(CHEVAL, 
 [[CANON, 'fr'], [CANON, 'ru'], [CANON, 'au']].forEach(([D, c], ci) => { const o = objet(D, habiller, c), m = new THREE.Mesh(o.pres, o.mat); m.position.set((ci - 1) * 4.5, 0, 5); m.rotation.y = -0.5; scene.add(m); });
 // maison morave : version détaillée à gauche, version allégée (vue de loin) à droite
 { const o = objet(MAISON, habiller); [o.pres, o.loin].forEach((g, i) => { const m = new THREE.Mesh(g, o.mat); m.position.set(i ? 9 : -9, 0, 16); m.rotation.y = 0.4; scene.add(m); }); }
+}
 
 let clip = q.get('clip') || 'marche';
 document.querySelectorAll('[data-clip]').forEach(b => { b.classList.toggle('on', b.dataset.clip === clip); b.onclick = () => { clip = b.dataset.clip; document.querySelectorAll('[data-clip]').forEach(x => x.classList.toggle('on', x === b)); }; });
 const t0 = +(q.get('t') ?? -1);
+// un clip et la position dans ce clip ; « salve » enchaîne joue, feu, rechargement et un temps au port d'arme
+const UNE_FOIS = new Set(['joue', 'feu', 'recharge']);
+function jouer(C, nom, t) {
+  if (nom === 'salve') { if (!C.joue) return []; const d = k => (C[k][1] - 1) / C[k][2], seq = ['joue', 'feu', 'recharge', 'attente'], T = d('joue') + d('feu') + d('recharge') + 2; let r = t % T;
+    for (const k of seq) { const dk = k === 'attente' ? 2 : d(k); if (r < dk || k === 'attente') return [C[k], k === 'attente' ? (r * C[k][2]) % C[k][1] : r * C[k][2]]; r -= dk; } }
+  const c = C[nom]; if (!c) return [];
+  if (UNE_FOIS.has(nom)) { const d = (c[1] - 1) / c[2], r = t % (d + 1); return [c, Math.min(r, d) * c[2]]; } // joué une fois, puis tenu une seconde
+  return [c, (t * c[2]) % c[1]];
+}
 function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize();
 if (q.get('vue')) { const v = q.get('vue').split(',').map(Number); camera.position.set(v[0], v[1], v[2]); ctl.target.set(v[3], v[4], v[5]); ctl.update(); } // ?vue=x,y,z,cible x,y,z
 renderer.setAnimationLoop(now => {
   const t = t0 >= 0 ? t0 : now / 1000;
-  groupes.forEach(({ M, lignes, n, clipDe }) => { const c = M.clips[clipDe(clip)] || M.clips.attente; for (let i = 0; i < n; i++) { const pos = (t * c[2]) % c[1], ia = Math.floor(pos); lignes.array[i * 2] = c[0] + ia + Math.min(0.999, pos - ia); lignes.array[i * 2 + 1] = c[0] + (ia + 1) % c[1]; } lignes.needsUpdate = true; });
+  groupes.forEach(({ M, lignes, n, clipDe }) => { for (let i = 0; i < n; i++) { let [c, pos] = jouer(M.clips, clipDe(clip), t);
+    if (!c) { c = M.clips.attente; pos = (t * c[2]) % c[1]; } const ia = Math.floor(pos); lignes.array[i * 2] = c[0] + ia + Math.min(0.999, pos - ia); lignes.array[i * 2 + 1] = c[0] + (ia + 1) % c[1]; } lignes.needsUpdate = true; });
   ctl.update(); renderer.render(scene, camera);
 });
