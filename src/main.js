@@ -201,7 +201,7 @@ addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'Digit1')
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 const el = renderer.domElement;
-el.addEventListener('wheel', e => { e.preventDefault(); cam.dist = Math.min(9000, Math.max(40, cam.dist * Math.exp(e.deltaY * 0.0011))); }, { passive: false });
+el.addEventListener('wheel', e => { e.preventDefault(); cam.dist = Math.min(9000, Math.max(3, cam.dist * Math.exp(e.deltaY * 0.0011))); }, { passive: false });
 el.addEventListener('contextmenu', e => e.preventDefault());
 function camUpdate(dt) {
   const v = cam.dist * 0.9 * dt * (keys.ShiftLeft ? 2.5 : 1), fwx = Math.sin(cam.yaw), fwz = -Math.cos(cam.yaw);
@@ -212,8 +212,9 @@ function camUpdate(dt) {
   cam.x = Math.max(-WX / 2, Math.min(WX / 2, cam.x)); cam.z = Math.max(-WZ / 2, Math.min(WZ / 2, cam.z));
   const gy = yAt(cam.x, cam.z), h = Math.cos(cam.pitch) * cam.dist;
   let px = cam.x - fwx * h, pz = cam.z - fwz * h, py = gy + Math.sin(cam.pitch) * cam.dist;
-  py = Math.max(py, yAt(px, pz) + 6);
-  camera.position.set(px, py, pz); camera.lookAt(cam.x, gy + 2, cam.z);
+  py = Math.max(py, yAt(px, pz) + Math.min(6, 1 + cam.dist * 0.1)); // de près, la caméra descend à hauteur d'homme
+  const pr = Math.max(0.15, Math.min(2, cam.dist * 0.04)); if (pr !== camera.near) { camera.near = pr; camera.updateProjectionMatrix(); } // plan proche rapproché avec le zoom
+  camera.position.set(px, py, pz); camera.lookAt(cam.x, gy + 1.4, cam.z);
 }
 
 /* ===== SOURIS : sélection et ordres ===== */
@@ -229,7 +230,7 @@ el.addEventListener('pointerdown', e => {
 });
 el.addEventListener('pointermove', e => {
   if (!drag) return;
-  if (drag.t === 'rot') { cam.yaw += (e.clientX - drag.x) * 0.005; cam.pitch = Math.max(0.12, Math.min(1.45, cam.pitch + (e.clientY - drag.y) * 0.004)); drag.x = e.clientX; drag.y = e.clientY; }
+  if (drag.t === 'rot') { cam.yaw += (e.clientX - drag.x) * 0.005; cam.pitch = Math.max(0.03, Math.min(1.45, cam.pitch + (e.clientY - drag.y) * 0.004)); drag.x = e.clientX; drag.y = e.clientY; }
   else { drag.x = e.clientX; drag.y = e.clientY; const w = Math.abs(drag.x - drag.x0), h = Math.abs(drag.y - drag.y0);
     if (w + h > 8) { boxEl.style.display = 'block'; boxEl.style.left = Math.min(drag.x, drag.x0) + 'px'; boxEl.style.top = Math.min(drag.y, drag.y0) + 'px'; boxEl.style.width = w + 'px'; boxEl.style.height = h + 'px'; } }
 });
