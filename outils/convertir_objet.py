@@ -10,9 +10,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from glb import Glb
 racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 b64 = lambda x: base64.b64encode(x.tobytes()).decode()
-def alleger(pos, idx, cible):
+def alleger(pos, idx, cible, uv=None):
     with tempfile.TemporaryDirectory() as t:
-        json.dump({'pos': pos.ravel().tolist(), 'idx': idx.tolist()}, open(t + '/a.json', 'w'))
+        json.dump({'pos': pos.ravel().tolist(), 'idx': idx.tolist(), **({'uv': uv.ravel().tolist()} if uv is not None else {})}, open(t + '/a.json', 'w'))
         print('  ', subprocess.run(['node', os.path.join(racine, 'outils/simplifier.js'), t + '/a.json', t + '/b.json', str(cible)], capture_output=True, text=True, check=True).stdout.strip())
         return np.array(json.load(open(t + '/b.json')), np.uint32)
 def paquet_fixe(m, idx):
@@ -21,8 +21,8 @@ def paquet_fixe(m, idx):
 def texture_url(im, cote):
     buf = io.BytesIO(); im.resize((cote, cote)).save(buf, 'JPEG', quality=86); return 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
 ap = argparse.ArgumentParser(); ap.add_argument('src'); ap.add_argument('nom')
-ap.add_argument('--longueur', type=float, required=True, help="plus grande dimension au sol, en mètres"); ap.add_argument('--avant', default='-x', help="axe du modèle qui regarde vers l'avant : -x, +x, -z ou +z")
-ap.add_argument('--loin', type=int, default=300, help='triangles de la version allégée'); ap.add_argument('--teinte', action='append', default=[]); ap.add_argument('--maison', action='store_true', help='version de loin : murs et toit à deux pans, faîte le long de z, quelques triangles'); a = ap.parse_args()
+ap.add_argument('--longueur', type=float, required=True, help="plus grande dimension au sol, en mètres"); ap.add_argument('--avant', default='-x', help="axe du modèle qui regarde vers l'avant : -x, +x, -z, +z, ou canon (trouvé seul)")
+ap.add_argument('--loin', type=int, default=300, help='triangles de la version allégée'); ap.add_argument('--teinte', action='append', default=[]); ap.add_argument('--pres', type=int, help='triangles de la version de près (par défaut : le modèle entier)'); ap.add_argument('--sans-debris', action='store_true', help='retire les petits morceaux posés à l\'écart (caisse oubliée par Meshy à côté de la pièce)'); ap.add_argument('--maison', action='store_true', help='version de loin : murs et toit à deux pans, faîte le long de z, quelques triangles'); a = ap.parse_args()
 
 def maison_de_loin(m, img):
     """Boîte et toit à deux pans (18 triangles), faîte le long de z, qui reprennent la couleur des murs et du toit
@@ -62,12 +62,35 @@ def vert_ocre(im):
     return Image.fromarray(np.round((x * (1 - m) + ocre * m) * 255).astype(np.uint8))
 TEINTES = {'vert-ocre': vert_ocre}
 
-g = Glb(a.src); m = g.maillage(); p = m['pos'].astype(np.float64); n = m['nor'].astype(np.float64)
-R = {'-x': [[0, 0, -1], [0, 1, 0], [1, 0, 0]], '+x': [[0, 0, 1], [0, 1, 0], [-1, 0, 0]], '-z': np.eye(3), '+z': [[-1, 0, 0], [0, 1, 0], [0, 0, -1]]}[a.avant]
-R = np.array(R, float); p = p @ R.T; n = n @ R.T # l'avant vers -z
+g = Glb(a.src); m = g.maillage()
+if a.sans_debris: # morceaux séparés : moins de 3 % des sommets et hors de la boîte du morceau principal
+    t = m['idx'].reshape(-1, 3); cle = np.unique(np.round(m['pos'], 4), axis=0, return_inverse=True)[1].ravel(); par = np.arange(cle.max() + 1)
+    def racine_(x):
+        while par[x] != x: par[x] = par[par[x]]; x = par[x]
+        return x
+    for i, j, k in cle[t]: par[racine_(j)] = racine_(i); par[racine_(k)] = racine_(i)
+    rac = np.array([racine_(c) for c in cle]); u, nb = np.unique(rac, return_counts=True); P0 = m['pos'][rac == u[np.argmax(nb)]]
+    garde = np.ones(len(rac), bool)
+    for r, c in zip(u, nb):
+        ctr = m['pos'][rac == r].mean(0)
+        if c < 0.03 * len(rac) and not np.all((ctr > P0.min(0)) & (ctr < P0.max(0))): garde[rac == r] = False; print('  morceau écarté :', c, 'sommets autour de', ctr.round(2))
+    t = t[garde[t].all(1)]; vu = np.unique(t); re = np.zeros(len(garde), np.uint32); re[vu] = np.arange(len(vu)) # on ne garde que les sommets utilisés
+    for c in ('pos', 'nor', 'uv'): m[c] = m[c][vu]
+    m['idx'] = re[t].ravel()
+p = m['pos'].astype(np.float64); n = m['nor'].astype(np.float64)
+if a.avant == 'canon': # pièce posée en biais : axe principal au sol, la bouche est le bout le plus haut, la crosse touche le sol
+    tube = p[p[:, 1] > np.percentile(p[:, 1], 75)] # le haut de la pièce, c'est le tube : il donne l'axe
+    c = tube[:, [0, 2]] - tube[:, [0, 2]].mean(0); w, v = np.linalg.eigh(c.T @ c); ax = v[:, -1]; th = np.arctan2(ax[0], ax[1])
+    R = np.array([[np.cos(th), 0, -np.sin(th)], [0, 1, 0], [np.sin(th), 0, np.cos(th)]]); q = p @ R.T; L = np.ptp(q[:, 2])
+    haut_min = lambda sel: np.percentile(q[sel, 1], 10) # le bout qui touche le sol est la crosse
+    if haut_min(q[:, 2] < q[:, 2].min() + 0.12 * L) < haut_min(q[:, 2] > q[:, 2].max() - 0.12 * L): R = np.diag([-1, 1, -1.0]) @ R # crosse vers +z, bouche vers -z
+    print('  axe de la pièce tourné de', round(float(np.degrees(th)), 1), '°')
+else: R = np.array({'-x': [[0, 0, -1], [0, 1, 0], [1, 0, 0]], '+x': [[0, 0, 1], [0, 1, 0], [-1, 0, 0]], '-z': np.eye(3), '+z': [[-1, 0, 0], [0, 1, 0], [0, 0, -1]]}[a.avant], float)
+p = p @ R.T; n = n @ R.T # l'avant vers -z
 k = a.longueur / max(np.ptp(p[:, 0]), np.ptp(p[:, 2])); p = (p - [(p[:, 0].max() + p[:, 0].min()) / 2, p[:, 1].min(), 0]) * k
 m['pos'] = p.astype(np.float32); m['nor'] = n.astype(np.float32)
 print(a.nom, ':', len(p), 'sommets,', len(m['idx']) // 3, 'triangles,', np.round(np.ptp(p, 0), 2), 'm (largeur, hauteur, longueur)')
-img = g.image(); out = {'pres': paquet_fixe(m, m['idx']), 'loin': paquet_fixe(*maison_de_loin(m, img)) if a.maison else paquet_fixe(m, alleger(m['pos'], m['idx'], a.loin)), 'tex': texture_url(img, 1024), 'teintes': {}}
+if a.pres and len(m['idx']) // 3 > a.pres: m['idx'] = alleger(m['pos'], m['idx'], a.pres, m['uv']) # modèle trop lourd : coutures de texture franchissables
+img = g.image(); out = {'pres': paquet_fixe(m, m['idx']), 'loin': paquet_fixe(*maison_de_loin(m, img)) if a.maison else paquet_fixe(m, alleger(m['pos'], m['idx'], a.loin, m['uv'] if a.pres else None)), 'tex': texture_url(img, 1024), 'teintes': {}}
 for t in a.teinte: camp, nom = t.split(':'); out['teintes'][camp] = texture_url(TEINTES[nom](img.resize((1024, 1024))), 1024)
 ch = os.path.join(racine, f'src/modeles/{a.nom}.js'); open(ch, 'w').write('export default ' + json.dumps(out) + ';\n'); print('écrit', ch, os.path.getsize(ch) // 1024, 'Ko')

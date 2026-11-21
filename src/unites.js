@@ -25,6 +25,12 @@ function geoModele(d) {
 }
 const texture = src => { const t = new THREE.TextureLoader().load(src); t.flipY = false; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; };
 
+/* Hauteur d'un cheval dans le jeu, en mètres avant grossissement (oreilles comprises) : le cavalier est calé
+   sur sa selle pour cette hauteur (outils/convertir_modele.py --selle) et pour un cavalier de 1,8 m. */
+export const HAUT_CHEVAL = 1.75;
+// grosse cavalerie (cuirassiers, carabiniers, garde) : même cheval, robe plus sombre
+export const ROBE_LOURD = 0x5a4a40;
+
 /* Soldat préparé par outils/convertir_modele.py. Corps et fusil partagent le même squelette ; le fusil est
    tenu au port d'arme, dans la main gauche contre l'épaule. habiller(material, uniformes) ajoute l'animation
    (et ce que le jeu veut en plus, comme la brume). */

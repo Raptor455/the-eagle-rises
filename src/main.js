@@ -5,7 +5,12 @@ import FR from './modeles/fr.js';
 import RU from './modeles/ru.js';
 import AU from './modeles/au.js';
 import CANON from './modeles/canon.js';
-import { animerShader, soldat, objet } from './unites.js';
+import CAV_FR from './modeles/cav-fr.js';
+import CAV_RU from './modeles/cav-ru.js';
+import CAV_AU from './modeles/cav-au.js';
+import COSAQUE from './modeles/cosaque.js';
+import CHEVAL from './modeles/cheval-selle.js';
+import { animerShader, soldat, objet, HAUT_CHEVAL, ROBE_LOURD } from './unites.js';
 import { UNITES } from './ordre-de-bataille.js';
 
 /* ===== SCÈNE ===== */
@@ -106,9 +111,15 @@ const SERVANTS = 6, ECART_PIECES = 14;
 const HAUT = 1.8 * SC, LOD_DIST = 260;
 /* qualité automatique : si la carte graphique peine, les distances de détail raccourcissent (jusqu'à 35 %), et s'allongent quand elle respire */
 let detail = 1, tSim = 0;
-const MODELES = { fr: soldat(FR, HAUT, withMist), ru: soldat(RU, HAUT, withMist), au: soldat(AU, HAUT, withMist) }; // Russes et Autrichiens : squelette et animations du Français
+const MODELES = { fr: soldat(FR, HAUT, withMist), ru: soldat(RU, HAUT, withMist), au: soldat(AU, HAUT, withMist) };
+/* cavalerie : un cavalier par camp (cosaque à part) assis sur un cheval de selle ; la grosse cavalerie a un cheval à robe sombre */
+const CAVALIERS = { fr: soldat(CAV_FR, HAUT, withMist), ru: soldat(CAV_RU, HAUT, withMist), au: soldat(CAV_AU, HAUT, withMist), cosaque: soldat(COSAQUE, HAUT, withMist) };
+const CHEVAUX = { selle: soldat(CHEVAL, HAUT_CHEVAL * SC, withMist), lourd: soldat(CHEVAL, HAUT_CHEVAL * SC, withMist) };
+CHEVAUX.lourd.mats.forEach(m => m.color.setHex(ROBE_LOURD)); Object.values(CHEVAUX).forEach(m => m.haut = HAUT_CHEVAL * SC);
+const LOURDS = new Set(['cuirassiers', 'carabiniers', 'garde']);
+const cleCavalier = r => r.sorte === 'cosaques' || !CAVALIERS[r.camp] ? 'cosaque' : r.camp, cleCheval = r => LOURDS.has(r.sorte) ? 'lourd' : 'selle';
 
-let sold, pools = [], provisoire, cavaliers, lointains; // sold : x, z, décalage de pas par figurine
+let sold, pools = [], provisoire, lointains; // sold : x, z, décalage de pas par figurine
 const matCoat = withMist(new THREE.MeshLambertMaterial({ vertexColors: true })), matRest = withMist(new THREE.MeshLambertMaterial({ vertexColors: true }));
 const POSTES = [[-1.3, 1.6], [1.3, 1.6], [-1.6, 3.2], [1.6, 3.2], [0, 4.8], [0.6, 7]]; // servants autour de leur pièce
 function slot(r, k, out) { // place de la figurine k dans la formation, repère du bataillon (x : front, z : profondeur)
@@ -144,14 +155,15 @@ function build() {
   pools.forEach(p => p.meshes.forEach(m => { scene.remove(m); m.dispose(); })); pools = [];
   let f0 = 0; regs.forEach(r => { r.max = figsDe(r); r.f0 = f0; f0 += r.max; });
   sold = new Float32Array(f0 * 3); const somme = f => regs.filter(f).reduce((a, r) => a + r.max, 0);
-  for (const camp in MODELES) { const m = MODELES[camp], n = Math.max(1, somme(r => r.camp === camp && aPied(r)));
-    m.pPres = pool(m.pres.map((g, i) => new THREE.InstancedMesh(g, m.mats[i], n)), ligneAnim(n)); m.pLoin = pool(m.loin.map((g, i) => new THREE.InstancedMesh(g, m.mats[i], n)), ligneAnim(n)); }
+  const pools2 = (m, n) => { n = Math.max(1, n); m.pPres = pool(m.pres.map((g, i) => new THREE.InstancedMesh(g, m.mats[i], n)), ligneAnim(n)); m.pLoin = pool(m.loin.map((g, i) => new THREE.InstancedMesh(g, m.mats[i], n)), ligneAnim(n)); };
+  for (const camp in MODELES) pools2(MODELES[camp], somme(r => r.camp === camp && aPied(r)));
+  for (const k in CAVALIERS) pools2(CAVALIERS[k], somme(r => !aPied(r) && cleCavalier(r) === k));
+  for (const k in CHEVAUX) pools2(CHEVAUX[k], somme(r => !aPied(r) && cleCheval(r) === k));
   const nP = Math.max(1, somme(r => !MODELES[r.camp] && aPied(r))), nC = Math.max(1, somme(r => !aPied(r)));
   provisoire = pool([new THREE.InstancedMesh(gCoat, matCoat, nP), new THREE.InstancedMesh(gRest, matRest, nP)]); provisoire.coul = true;
-  cavaliers = pool([new THREE.InstancedMesh(gCavCoat, matCoat, nC), new THREE.InstancedMesh(gCavRest, matRest, nC)]); cavaliers.coul = true;
   lointains = pool([new THREE.InstancedMesh(gLoin, matCoat, Math.max(1, somme(r => aPied(r))))]); lointains.coul = true;
   lointains.cav = pool([new THREE.InstancedMesh(gLoinCav, matCoat, nC)]); lointains.cav.coul = true;
-  [provisoire, cavaliers, lointains, lointains.cav].forEach(p => { p.meshes[0].setColorAt(0, new THREE.Color()); p.C = p.meshes[0].instanceColor.array; });
+  [provisoire, lointains, lointains.cav].forEach(p => { p.meshes[0].setColorAt(0, new THREE.Color()); p.C = p.meshes[0].instanceColor.array; });
   regs.forEach((r, ri) => { for (let k = 0; k < r.max; k++) { const i = r.f0 + k;
     sold[i * 3] = r.x; sold[i * 3 + 1] = r.z; sold[i * 3 + 2] = rnd(i, 7); } r.snap = true; // position, et où en est le pas
     r.arrivee = (r.opts.arrivee || 0) * 60; r.reserve = r.arrivee > 0; // renfort : absent jusqu'à son heure
@@ -447,7 +459,7 @@ const tmp = [0, 0, 0]; let tAnim = 0; const champ = new THREE.Frustum(), mChamp 
 function sim(dt) {
   const t = performance.now() / 1000; pools.forEach(p => p.n = 0);
   camera.updateMatrixWorld(); champ.setFromProjectionMatrix(mChamp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
-  if (speed > 0) tAnim += dt / speed * Math.min(speed, 2.5); // les jambes ne s'emballent pas en accéléré
+  const dAnim = speed > 0 ? dt / speed * Math.min(speed, 2.5) : 0; tAnim += dAnim; // les jambes ne s'emballent pas en accéléré
   horloge += dt;
   regs.forEach((r, ri) => {
     if (r.reserve && horloge >= r.arrivee) { r.reserve = false; r.n = r.max; r.snap = true; r.flag.visible = true; avis(`Renforts : ${r.opts.corps || r.nom} entre en ligne.`); } // le renfort arrive
@@ -470,7 +482,9 @@ function sim(dt) {
     }
     const cav = r.type === 'cav', cs = Math.cos(r.face), sn = Math.sin(r.face), vmax = (cav ? (r.charge ? 9 : fuite ? 7 : 4.5) : fuite || r.charge ? 4.2 : 2.6) * dt, course = fuite || (r.charge && r.dEnn < ELAN);
     const dCam = Math.hypot(camera.position.x - r.x, camera.position.z - r.z, camera.position.y - yAt(r.x, r.z)), loin = dCam > LOIN_DIST * detail;
-    const md = cav || loin ? null : MODELES[r.camp], P = loin ? (cav ? lointains.cav : lointains) : cav ? cavaliers : !md ? provisoire : dCam < LOD_DIST * detail ? md.pPres : md.pLoin, M = P.M;
+    const md = loin ? null : cav ? CHEVAUX[cleCheval(r)] : MODELES[r.camp], proche = dCam < LOD_DIST * detail, P = loin ? (cav ? lointains.cav : lointains) : !md ? provisoire : proche ? md.pPres : md.pLoin, M = P.M;
+    const mc = cav && !loin ? CAVALIERS[cleCavalier(r)] : null, P2 = mc && (proche ? mc.pPres : mc.pLoin); // le cavalier, sur la selle de son cheval
+    const cAvC = mc && (avance && (r.charge || fuite) ? mc.clips.course : mc.clips.attente);
     sphere.center.set(r.x, yAt(r.x, r.z), r.z); sphere.radius = (r.type === 'art' ? 60 : front(r) / 2 + 40) * (fuite ? 2 : 1);
     const vu = champ.intersectsSphere(sphere); if (!vu) r.snap = true; // hors du champ de la caméra : rien à dessiner, les hommes reprendront leur place en revenant
     for (let k = 0; vu && k < r.n; k++) {
@@ -481,15 +495,17 @@ function sim(dt) {
       if (r.snap) { x = tmp[0]; z = tmp[1]; }
       else if (e > 1e-4 && dt > 0) { const st = Math.min(e, vmax * (0.8 + rnd(i, 5) * 0.4)); x += ex / e * st; z += ez / e * st; fait = st; if (!md) bob = Math.abs(Math.sin(t * (cav ? 4 + st / dt : 6) * Math.min(speed, 3) + sold[i * 3 + 2])) * (cav ? 0.18 : 0.12) * SC; }
       if (md) { // en marche, l'animation avance avec le chemin réellement parcouru : les pieds ne glissent pas
-        const c = e > 0.25 || avance ? (course ? md.clips.course : md.clips.marche) : md.clips.attente; let pos;
+        const c = e > 0.25 || avance ? (course || cav && avance ? md.clips.course : md.clips.marche) : md.clips.attente; let pos; // le cheval qui suit son escadron prend le galop
         if (c === md.clips.attente) pos = (tAnim * c[2] + rnd(i, 7) * 40) % c[1];
-        else { sold[i * 3 + 2] = (sold[i * 3 + 2] + fait / (c[3] * HAUT)) % 1; pos = sold[i * 3 + 2] * c[1]; }
+        else { let pas = fait / (c[3] * (md.haut || HAUT)); if (cav) pas = Math.min(pas, dAnim * c[2] / c[1] * 1.6); // à la charge, les jambes ne moulinent pas : le sabot glisse un peu
+          sold[i * 3 + 2] = (sold[i * 3 + 2] + pas) % 1; pos = sold[i * 3 + 2] * c[1]; }
         const ia = Math.floor(pos) % c[1]; P.R.array[P.n * 2] = c[0] + ia + Math.min(0.999, pos - Math.floor(pos)); P.R.array[P.n * 2 + 1] = c[0] + (ia + 1) % c[1]; }
       sold[i * 3] = x; sold[i * 3 + 1] = z;
       if (P.coul) { const h = CAMPS[r.camp].lin || (CAMPS[r.camp].lin = new THREE.Color(CAMPS[r.camp].coul)), v = 0.85 + rnd(i, 3) * 0.3; P.C[P.n * 3] = h.r * v; P.C[P.n * 3 + 1] = h.g * v; P.C[P.n * 3 + 2] = h.b * v; } // couleur du camp
       const o = P.n++ * 16, fc = tourne ? Math.cos(r.face + tourne) : cs, fs = tourne ? Math.sin(r.face + tourne) : sn; // rotation autour de la verticale puis position ; en carré, chaque face regarde dehors
       M[o] = fc; M[o + 1] = 0; M[o + 2] = fs; M[o + 3] = 0; M[o + 4] = 0; M[o + 5] = 1; M[o + 6] = 0; M[o + 7] = 0;
       M[o + 8] = -fs; M[o + 9] = 0; M[o + 10] = fc; M[o + 11] = 0; M[o + 12] = x; M[o + 13] = yAt(x, z) + bob; M[o + 14] = z; M[o + 15] = 1;
+      if (P2) { const pos = (tAnim * cAvC[2] + rnd(i, 9) * 40) % cAvC[1], ia = Math.floor(pos); P2.R.array[P2.n * 2] = cAvC[0] + ia + Math.min(0.999, pos - ia); P2.R.array[P2.n * 2 + 1] = cAvC[0] + (ia + 1) % cAvC[1]; P2.M.set(M.subarray(o, o + 16), P2.n++ * 16); }
     }
     if (vu) r.snap = false;
     const gy = yAt(r.x, r.z); r.flag.position.set(r.x, gy, r.z); r.flag.rotation.y = -r.face;
