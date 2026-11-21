@@ -82,7 +82,7 @@ function addReg(camp, nom, lat, lon, face, type, h, sorte, opts) { const [x, z] 
   regs.push({ camp, nom, x, z, face, type, sorte: sorte || (type === 'cav' ? 'dragons' : type === 'art' ? 'pied' : 'ligne'), h0: h || (type === 'art' ? pieces * 25 : type === 'cav' ? 150 : 600), pieces, opts, f0: 0, deploi: 0, tirT: 0, max: 0, tx: x, tz: z, tface: face, form: 'colonne', sel: false, moving: false, n: 0, moral: 100, etat: 'ok', recharge: 0, sousFeu: 99, acc: 0, ...ETAT0() }); }
 const figsDe = r => r.type === 'art' ? r.pieces * SERVANTS : Math.max(6, Math.round(r.h0 / ECHELLE));
 const ESP = () => Math.max(0.45, Math.sqrt(ECHELLE / 5)); // espacement des figurines : serré à 1/1, desserré quand une figurine vaut plusieurs hommes
-const ETAT0 = () => ({ manoeuvre: 0, desordre: 0, fatigue: 0, charge: null, testCharge: false, melee: null, meleeT: 0, choc: 0, cible: null, assaut: false, issue: null }); // manœuvre, combat rapproché, fatigue
+const ETAT0 = () => ({ tFeu: 99, manoeuvre: 0, desordre: 0, fatigue: 0, charge: null, testCharge: false, melee: null, meleeT: 0, choc: 0, cible: null, assaut: false, issue: null }); // manœuvre, combat rapproché, fatigue
 /* Deux batailles : la démo de Pratzen (par défaut), ou Austerlitz entière avec ?bataille=austerlitz dans l'adresse */
 const BATAILLE = new URLSearchParams(location.search).get('bataille') === 'austerlitz' ? 'austerlitz' : 'pratzen';
 const RABAT = { tirailleurs: 'leger', grenzer: 'leger', pionniers: 'ligne' }; // sortes rabattues sur la plus proche
@@ -348,7 +348,7 @@ function salve(r, e, d, bout) { // bout : feu à bout portant sur une charge
   pertes(e, tireurs * p * conv(r, e), r, coef);
   const cs = Math.cos(r.face), sn = Math.sin(r.face), w = r.form === 'carre' ? 10 : front(r);
   for (let k = 0; k < (tir ? 5 : 14); k++) { const lx = (Math.random() - 0.5) * w, x = r.x + lx * cs + sn * 6, z = r.z + lx * sn - cs * 6; bouffee(x, yAt(x, z) + 2.5 + Math.random() * 2, z); }
-  r.recharge = (tir ? RECHARGE_TIR : RECHARGE) * (0.9 + Math.random() * 0.3); r.tirT = 3;
+  r.recharge = (tir ? RECHARGE_TIR : RECHARGE) * (0.9 + Math.random() * 0.3); r.tirT = 3; r.tFeu = 0;
 }
 /* artillerie : boulet de loin, mitraille de près ; il faut voir la cible, donc les crêtes et les contre-pentes comptent */
 function enVue(r, e) { const a0 = altAt(r.x, r.z) + 2, a1 = altAt(e.x, e.z) + 2; for (let k = 1; k < 16; k++) { const t = k / 16; if (altAt(r.x + (e.x - r.x) * t, r.z + (e.z - r.z) * t) > a0 + (a1 - a0) * t) return false; } return true; }
@@ -405,7 +405,7 @@ function iaCav(r) { // cavalerie alliée : charger ce qui est vulnérable, sinon
 function combat(r, dt) {
   const art = r.type === 'art', tir = r.form === 'tirailleurs', portee = art ? PORTEE_ART : tir ? PORTEE_TIR : PORTEE;
   let e = null, d = 1e9; for (const o of regs) if (o.n > 0 && ennemis(r, o)) { const q = Math.hypot(o.x - r.x, o.z - r.z); if (q < d && (o.etat === 'ok' || q < portee)) { d = q; e = o; } }
-  r.ennemi = e; r.dEnn = d; r.recharge -= dt; r.sousFeu += dt; r.tirT -= dt; r.manoeuvre = Math.max(0, r.manoeuvre - dt); r.desordre = Math.max(0, r.desordre - dt);
+  r.ennemi = e; r.dEnn = d; r.recharge -= dt; r.sousFeu += dt; r.tirT -= dt; r.tFeu += dt; r.manoeuvre = Math.max(0, r.manoeuvre - dt); r.desordre = Math.max(0, r.desordre - dt);
   if (!r.charge && !r.melee) r.fatigue = Math.max(0, r.fatigue - dt * (r.moving ? 0.1 : 0.5));
   if (r.etat === 'deroute') { // fuite, puis ralliement loin de l'ennemi
     if (!r.moving || d < 250) { const a = e ? cap(e, r) : 0; r.tx = Math.max(-WX / 2 + 60, Math.min(WX / 2 - 60, r.x + Math.sin(a) * 500)); r.tz = Math.max(-WZ / 2 + 60, Math.min(WZ / 2 - 60, r.z - Math.cos(a) * 500)); r.moving = true; }
@@ -456,6 +456,7 @@ function combat(r, dt) {
 }
 
 /* ===== SIMULATION : on déplace le bataillon, les figurines rejoignent leur place ===== */
+const D = c => (c[1] - 1) / c[2]; // durée d'un geste joué une seule fois (joue, feu, rechargement)
 const tmp = [0, 0, 0]; let tAnim = 0; const champ = new THREE.Frustum(), mChamp = new THREE.Matrix4(), sphere = new THREE.Sphere();
 function sim(dt) {
   const t = performance.now() / 1000; pools.forEach(p => p.n = 0);
@@ -486,6 +487,10 @@ function sim(dt) {
     const md = loin ? null : cav ? CHEVAUX[cleCheval(r)] : MODELES[r.camp], proche = dCam < LOD_DIST * detail, P = loin ? (cav ? lointains.cav : lointains) : !md ? provisoire : proche ? md.pPres : md.pLoin, M = P.M;
     const mc = cav && !loin ? CAVALIERS[cleCavalier(r)] : null, P2 = mc && (proche ? mc.pPres : mc.pLoin); // le cavalier, sur la selle de son cheval
     const cAvC = mc && (avance && (r.charge || fuite) ? mc.clips.course : mc.clips.attente);
+    // gestes de l'infanterie : 1 feu de salve, 2 baïonnette croisée (charge), 3 mêlée, 4 feu à volonté des tirailleurs
+    let geste = 0; if (md && md.clips.joue && !cav && r.type !== 'art' && !fuite) geste = r.melee ? 3 : r.charge ? 2 : avance || r.manoeuvre > 0 || r.desordre > 0 ? 0 : r.form === 'tirailleurs' ? (r.tFeu < 12 ? 4 : 0) : 1;
+    const enJoue = geste === 1 && r.recharge < D(md.clips.joue) && r.ennemi && r.dEnn < PORTEE && (r.form === 'carre' || Math.abs(ecart(cap(r, r.ennemi), r.face)) < ARC);
+    const rangs = r.form === 'colonne' ? 2 * Math.max(6, Math.ceil(r.max / 10)) : 1e9; // en colonne, seuls les deux premiers rangs tirent
     sphere.center.set(r.x, yAt(r.x, r.z), r.z); sphere.radius = (r.type === 'art' ? 60 : front(r) / 2 + 40) * (fuite ? 2 : 1);
     const vu = champ.intersectsSphere(sphere); if (!vu) r.snap = true; // hors du champ de la caméra : rien à dessiner, les hommes reprendront leur place en revenant
     for (let k = 0; vu && k < r.n; k++) {
@@ -496,11 +501,21 @@ function sim(dt) {
       if (r.snap) { x = tmp[0]; z = tmp[1]; }
       else if (e > 1e-4 && dt > 0) { const st = Math.min(e, vmax * (0.8 + rnd(i, 5) * 0.4)); x += ex / e * st; z += ez / e * st; fait = st; if (!md) bob = Math.abs(Math.sin(t * (cav ? 4 + st / dt : 6) * Math.min(speed, 3) + sold[i * 3 + 2])) * (cav ? 0.18 : 0.12) * SC; }
       if (md) { // en marche, l'animation avance avec le chemin réellement parcouru : les pieds ne glissent pas
-        const c = e > 0.25 || avance ? (course || cav && avance ? md.clips.course : md.clips.marche) : md.clips.attente; let pos; // le cheval qui suit son escadron prend le galop
-        if (c === md.clips.attente) pos = (tAnim * c[2] + rnd(i, 7) * 40) % c[1];
-        else { let pas = fait / (c[3] * (md.haut || HAUT)); if (cav) pas = Math.min(pas, dAnim * c[2] / c[1] * 1.6); // à la charge, les jambes ne moulinent pas : le sabot glisse un peu
-          sold[i * 3 + 2] = (sold[i * 3 + 2] + pas) % 1; pos = sold[i * 3 + 2] * c[1]; }
-        const ia = Math.floor(pos) % c[1]; P.R.array[P.n * 2] = c[0] + ia + Math.min(0.999, pos - Math.floor(pos)); P.R.array[P.n * 2 + 1] = c[0] + (ia + 1) % c[1]; }
+        const C = md.clips, bouge = e > 0.25 || avance; let c = C.attente, pos = -1, boucle = true; // pos < 0 : boucle d'attente, ou marche
+        if (geste === 3) c = C.estoc;                                     // mêlée : coups de baïonnette
+        else if (geste === 2) { if (bouge) c = course ? C.assaut : C.charge; else { c = C.estoc; pos = 0; } } // charge : baïonnette croisée
+        else if (bouge) c = course || cav ? C.course : C.marche;         // le cheval qui suit son escadron prend le galop
+        else if (geste === 1 && k < rangs) { boucle = false;             // feu de salve : joue, feu, puis chacun recharge à son rythme
+          if (enJoue) { c = C.joue; pos = (D(c) - Math.max(0, r.recharge)) * c[2]; }
+          else if (r.tFeu < D(C.feu)) { c = C.feu; pos = r.tFeu * c[2]; }
+          else { const tr = (r.tFeu - D(C.feu) - rnd(i, 31) * 0.8) * (0.85 + rnd(i, 33) * 0.3); if (tr < D(C.recharge)) { c = C.recharge; pos = Math.max(0, tr) * c[2]; } else boucle = true; } }
+        else if (geste === 4) { const dj = D(C.joue), df = D(C.feu), dr = D(C.recharge), T = dj + df + dr + 3, ts = (tAnim + rnd(i, 35) * T) % T; // tirailleurs : feu à volonté, chacun son tour
+          if (ts < dj + df + dr) { boucle = false; if (ts < dj) { c = C.joue; pos = ts * c[2]; } else if (ts < dj + df) { c = C.feu; pos = (ts - dj) * c[2]; } else { c = C.recharge; pos = (ts - dj - df) * c[2]; } } }
+        if (pos < 0) { if (c[3] < 0.05) pos = (tAnim * c[2] + rnd(i, 7) * 40) % c[1]; // sur place
+          else { let pas = fait / (c[3] * (md.haut || HAUT)); if (cav) pas = Math.min(pas, dAnim * c[2] / c[1] * 1.6); // à la charge, les jambes ne moulinent pas : le sabot glisse un peu
+            sold[i * 3 + 2] = (sold[i * 3 + 2] + pas) % 1; pos = sold[i * 3 + 2] * c[1]; } }
+        if (!boucle) pos = Math.min(pos, c[1] - 1);
+        const ia = Math.floor(pos) % c[1]; P.R.array[P.n * 2] = c[0] + ia + Math.min(0.999, pos - Math.floor(pos)); P.R.array[P.n * 2 + 1] = c[0] + (boucle ? (ia + 1) % c[1] : Math.min(ia + 1, c[1] - 1)); }
       sold[i * 3] = x; sold[i * 3 + 1] = z;
       if (P.coul) { const h = CAMPS[r.camp].lin || (CAMPS[r.camp].lin = new THREE.Color(CAMPS[r.camp].coul)), v = 0.85 + rnd(i, 3) * 0.3; P.C[P.n * 3] = h.r * v; P.C[P.n * 3 + 1] = h.g * v; P.C[P.n * 3 + 2] = h.b * v; } // couleur du camp
       const o = P.n++ * 16, fc = tourne ? Math.cos(r.face + tourne) : cs, fs = tourne ? Math.sin(r.face + tourne) : sn; // rotation autour de la verticale puis position ; en carré, chaque face regarde dehors
