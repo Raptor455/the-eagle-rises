@@ -53,4 +53,4 @@ Double-cliquer sur `construire-exe.bat` après chaque mise à jour du code (ou `
 ## À vérifier
 - L'ordre de bataille et les positions de départ sont provisoires.
 - Les villages, les routes, la faisanderie de Sokolnitz et les étangs de Satschan et de Menitz sont placés approximativement, à vérifier sur une carte d'époque.
-- Le relief vertical est grossi 2,5 fois pour que les pentes se lisent.
+- Tout est à l'échelle 1/1 : distances, relief et taille des soldats. `VE` (src/carte.js) et `SC` (src/main.js) permettent de regrossir le relief ou les figurines.
