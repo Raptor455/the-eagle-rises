@@ -38,12 +38,16 @@ Double-cliquer sur `construire-exe.bat` après chaque mise à jour du code (ou `
 - `src/heights.js` : le relief et les ruisseaux, fabriqués par `python3 outils/relief.py` à partir des images de `donnees/` (les tuiles manquantes sont téléchargées).
 - `outils/meshy/` : génère les modèles avec l'API Meshy à partir d'une liste d'unités (`npm run meshy`), voir `outils/meshy/LISEZ-MOI.md`.
 - `src/unites.js` : les modèles des soldats et des objets fixes (canon), partagés par le jeu et la galerie.
-- `galerie.html` : les soldats des trois camps et les canons en gros plan, avec leurs animations (assemblée, comme `index.html`).
+- `galerie.html` : les soldats, les cavaliers des trois camps et les canons en gros plan, avec leurs animations (assemblée, comme `index.html`).
 - `modeles/` : les modèles Meshy d'origine (.glb).
 - `outils/convertir_modele.py` : prépare un soldat animé pour la foule, résultat dans `src/modeles/`. Demande Python avec numpy et Pillow. Le fusil est tenu au port d'arme : bras gauche figé dans toutes les animations, fusil vertical contre l'épaule gauche, crosse dans la main.
   - soldat animé par Meshy : `python3 outils/convertir_modele.py modeles/fantassin-francais-anime.glb fr --fusil modeles/fusil-1777.glb`
-  - soldat Meshy sans squelette, en pose A : il reprend squelette et animations du Français (`python3 outils/convertir_modele.py modeles/fantassin-russe.glb ru --squelette modeles/fantassin-francais-anime.glb --fusil modeles/fusil-1777.glb`, idem `fantassin-autrichien.glb au`)
-- `outils/convertir_objet.py` : prépare un objet fixe (canon, bâtiment) en mètres, l'avant vers -z (`python3 outils/convertir_objet.py modeles/canon-gribeauval.glb canon --longueur 4.0 --avant=-x --teinte au:vert-ocre`).
+  - soldat Meshy sans squelette, en pose A : il reprend squelette et animations du Français (`python3 outils/convertir_modele.py modeles/fantassin-autrichien.glb au --squelette modeles/fantassin-francais-anime.glb --fusil modeles/fusil-1777.glb`)
+  - Russe animé par Meshy, allégé de 20 000 à 3 000 triangles : `python3 outils/convertir_modele.py modeles/fantassin-russe-anime.glb ru --fusil modeles/fusil-1777.glb --pres 3000`
+  - cheval : `python3 outils/convertir_modele.py modeles/cheval-selle-anime.glb cheval-selle --sans-port --pres 3000 --loin 500`
+  - cavalier (squelette Mixamo, clip « riding ») : `python3 outils/convertir_modele.py modeles/cavalier-cuirassier-francais-anime.glb cav-fr --sans-port --pres 3000 --loin 500 --selle=0.1224,0.5122,-0.1343 --clips "attente=riding:10:0-1.1,marche=riding:10:0-1.1,course=riding:10:2.4-7.6"` ; idem `cavalier-russe-anime cav-ru --selle=0.1152,0.5294,-0.1461`, `cavalier-autrichien-anime cav-au --selle=0.1124,0.5117,-0.1722`, `cosaque-du-don-anime cosaque --selle=0.1374,0.4956,-0.1606`. `--selle` (en hauteurs de cavalier) pose les hanches sur la selle du cheval, `--clips nom=mot:images par seconde:début-fin` découpe un clip.
+  - En jeu : cavalier selon le camp (cosaque pour les cosaques), cheval de selle, robe sombre pour cuirassiers, carabiniers et garde. Le cheval lourd, la licorne russe et le canon autrichien de Meshy ne sont pas utilisés (cheval cabré sans animations, roues de travers) : les trois camps tirent avec le Gribeauval, affût ocre pour les Autrichiens.
+- `outils/convertir_objet.py` : prépare un objet fixe (canon, bâtiment) en mètres, l'avant vers -z (`python3 outils/convertir_objet.py modeles/canon-gribeauval.glb canon --longueur 4.0 --avant=-x --teinte au:vert-ocre`). `--avant=canon` trouve seul l'axe du fût, `--pres N` allège la version de près, `--sans-debris` retire les morceaux posés à l'écart, `--maison` fait une maison de loin en quelques triangles.
 - `outils/assembler.js` : refait `index.html` et `galerie.html` (`npm install`, puis `npm run assembler`).
 
 ## À vérifier
