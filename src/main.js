@@ -509,7 +509,7 @@ function sim(dt) {
       if (P2) { const pos = (tAnim * cAvC[2] + rnd(i, 9) * 40) % cAvC[1], ia = Math.floor(pos); P2.R.array[P2.n * 2] = cAvC[0] + ia + Math.min(0.999, pos - ia); P2.R.array[P2.n * 2 + 1] = cAvC[0] + (ia + 1) % cAvC[1]; P2.M.set(M.subarray(o, o + 16), P2.n++ * 16); }
     }
     if (vu) r.snap = false;
-    const gy = yAt(r.x, r.z); r.flag.position.set(r.x, gy, r.z); r.flag.rotation.y = -r.face;
+    const gy = yAt(r.x, r.z); r.flag.position.set(r.x, gy, r.z); r.flag.rotation.y = -r.face; { const dC = Math.hypot(camera.position.x - r.x, camera.position.y - gy, camera.position.z - r.z); r.flag.scale.setScalar(dC < 60 ? 0.001 : Math.min(1, dC / 300)); } // le drapeau de repère rapetisse quand on approche et disparaît à moins de 60 m
     if (r.type === 'art') for (let g = 0; g < r.pieces; g++) { toWorld(r, (g - (r.pieces - 1) / 2) * ECART_PIECES, 0, tmp); mE.set(0, -r.face, 0); mQ.setFromEuler(mE); mV.set(tmp[0], yAt(tmp[0], tmp[1]), tmp[1]); r.canons.setMatrixAt(r.canon0 + g, mM.compose(mV, mQ, mSC)); }
     const rad = r.type === 'art' ? 36 : r.form === 'colonne' ? 22 : r.form === 'carre' ? front(r) * 0.75 + 6 : front(r) / 2 + 8; r.ring.visible = r.sel; r.ring.position.set(r.x, gy + 1.5, r.z); r.ring.scale.set(rad, 1, rad);
   });
