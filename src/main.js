@@ -152,6 +152,8 @@ const SERVANTS = 6, ECART_PIECES = 14;
 
 /* modèles Meshy préparés par outils/convertir_modele.py : un maillage détaillé de près, un allégé de loin */
 const HAUT = 1.8 * SC, LOD_DIST = 260;
+/* qualité automatique : si la carte graphique peine, les distances de détail raccourcissent (jusqu'à 35 %), et s'allongent quand elle respire */
+let detail = 1, tSim = 0;
 const bin = (t, T) => { const b = atob(t), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new T(u.buffer); };
 function geoModele(d) {
   const g = new THREE.BufferGeometry();
@@ -536,8 +538,8 @@ function sim(dt) {
       else if (fuite || Math.abs(da) < 0.01) r.moving = false;
     }
     const cav = r.type === 'cav', cs = Math.cos(r.face), sn = Math.sin(r.face), vmax = (cav ? (r.charge ? 9 : fuite ? 7 : 4.5) : fuite || r.charge ? 4.2 : 2.6) * dt, course = fuite || (r.charge && r.dEnn < ELAN);
-    const dCam = Math.hypot(camera.position.x - r.x, camera.position.z - r.z, camera.position.y - yAt(r.x, r.z)), loin = dCam > LOIN_DIST;
-    const md = cav || loin ? null : MODELES[r.camp], P = loin ? (cav ? lointains.cav : lointains) : cav ? cavaliers : !md ? provisoire : dCam < LOD_DIST ? md.pPres : md.pLoin, M = P.M;
+    const dCam = Math.hypot(camera.position.x - r.x, camera.position.z - r.z, camera.position.y - yAt(r.x, r.z)), loin = dCam > LOIN_DIST * detail;
+    const md = cav || loin ? null : MODELES[r.camp], P = loin ? (cav ? lointains.cav : lointains) : cav ? cavaliers : !md ? provisoire : dCam < LOD_DIST * detail ? md.pPres : md.pLoin, M = P.M;
     sphere.center.set(r.x, yAt(r.x, r.z), r.z); sphere.radius = (r.type === 'art' ? 60 : front(r) / 2 + 40) * (fuite ? 2 : 1);
     const vu = champ.intersectsSphere(sphere); if (!vu) r.snap = true; // hors du champ de la caméra : rien à dessiner, les hommes reprendront leur place en revenant
     for (let k = 0; vu && k < r.n; k++) {
@@ -563,7 +565,9 @@ function sim(dt) {
     if (r.type === 'art') for (let g = 0; g < r.pieces; g++) { toWorld(r, (g - (r.pieces - 1) / 2) * ECART_PIECES, 0, tmp); mE.set(0, -r.face, 0); mQ.setFromEuler(mE); mV.set(tmp[0], yAt(tmp[0], tmp[1]), tmp[1]); canons.setMatrixAt(r.canon0 + g, mM.compose(mV, mQ, mS)); }
     const rad = r.type === 'art' ? 36 : r.form === 'colonne' ? 22 : r.form === 'carre' ? front(r) * 0.75 + 6 : front(r) / 2 + 8; r.ring.visible = r.sel; r.ring.position.set(r.x, gy + 1.5, r.z); r.ring.scale.set(rad, 1, rad);
   });
-  pools.forEach(p => { p.meshes.forEach(m => m.count = p.n); p.meshes[0].instanceMatrix.needsUpdate = true; if (p.R) p.R.needsUpdate = true; if (p.coul) p.meshes[0].instanceColor.needsUpdate = true; });
+  pools.forEach(p => { p.meshes.forEach(m => m.count = p.n); if (!p.n) return; // n'envoyer à la carte graphique que la partie utilisée des tampons (ils sont dimensionnés pour toute l'armée)
+    const env = (att, k) => { att.clearUpdateRanges(); att.addUpdateRange(0, p.n * k); att.needsUpdate = true; };
+    env(p.meshes[0].instanceMatrix, 16); if (p.R) env(p.R, 2); if (p.coul) env(p.meshes[0].instanceColor, 3); });
   canons.instanceMatrix.needsUpdate = true;
   fumeeMaj(dt);
 }
@@ -610,10 +614,13 @@ addEventListener('resize', resize); resize(); build(); hud(); setSpeed(1);
 let last = performance.now(), fN = 0, fT = 0;
 function loop(now) {
   const real = Math.min(0.1, (now - last) / 1000); last = now;
-  camUpdate(real); sim(real * speed); if (avisT > 0 && (avisT -= real) <= 0) avis(''), avisT = 0;
+  camUpdate(real); const t0 = performance.now(); sim(real * speed); tSim = tSim * 0.9 + (performance.now() - t0) * 0.1; if (avisT > 0 && (avisT -= real) <= 0) avis(''), avisT = 0;
   for (const s of labels) { const d = camera.position.distanceTo(s.position) * 0.11; s.scale.set(d, d * 96 / 512, 1); }
   renderer.render(scene, camera);
-  fN++; fT += real; if (fT > 0.5) { document.getElementById('fps').textContent = Math.round(fN / fT); fN = 0; fT = 0; hud(); }
+  fN++; fT += real; if (fT > 0.5) { const fps = fN / fT; document.getElementById('fps').textContent = Math.round(fps);
+    if (fps < 45) detail = Math.max(0.35, detail * 0.85); else if (fps > 57) detail = Math.min(1, detail * 1.08);
+    const perf = document.getElementById('perf'); if (perf) perf.textContent = `calcul ${tSim.toFixed(1)} ms · ${(renderer.info.render.triangles / 1e6).toFixed(1)} M triangles · détail ${Math.round(detail * 100)} %`;
+    fN = 0; fT = 0; hud(); }
   requestAnimationFrame(loop);
 }
 window.__jeu = { regs, cam, order, ll, yAt, setForm, sim, setEchelle: e => { ECHELLE = e; }, changerForm, lancerCharge, attaquer, charger, setSpeed, hommes, build, toggleIA: v => { iaAllies = v; } };
