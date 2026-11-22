@@ -14,27 +14,41 @@ racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ap = argparse.ArgumentParser(); ap.add_argument('src'); ap.add_argument('nom'); ap.add_argument('--fusil'); ap.add_argument('--squelette', help='modèle animé dont on reprend squelette et animations, pour un modèle sans squelette')
 ap.add_argument('--sans-port', action='store_true', help="pas de port d'arme : les bras suivent l'animation (cavaliers, chevaux)")
 ap.add_argument('--clips', help="animations : nom=mot:images par seconde, séparés par des virgules (ex. attente=idle:10,marche=walking:24)")
-ap.add_argument('--pres', type=int, help='triangles de la version de près (par défaut : le modèle entier)'); ap.add_argument('--loin', type=int, default=420, help='triangles de la version de loin')
+ap.add_argument('--coutures', action='store_true', help="avec --pres : respecte les coutures de texture (uniforme propre, mais plus de triangles que demandé)"); ap.add_argument('--pres', type=int, help='triangles de la version de près (par défaut : le modèle entier)'); ap.add_argument('--loin', type=int, default=420, help='triangles de la version de loin')
 ap.add_argument('--selle', help="x,y,z : décalage du modèle, en hauteurs du modèle (cavalier assis sur le dos du cheval)"); a = ap.parse_args()
 # nom dans le jeu : (mot cherché dans le nom du clip, images par seconde)
 CLIPS = {'marche': ('walking', 24), 'course': ('running', 24), 'attente': ('idle', 10)}
 if a.clips: CLIPS = {n: (v.split(':')[0], int(v.split(':')[1]), *([tuple(map(float, v.split(':')[2].split('-')))] if v.count(':') > 1 else [])) for n, v in (c.split('=') for c in a.clips.split(','))} # mot:ips[:début-fin en s]
 
 b64 = lambda x: base64.b64encode(x.tobytes()).decode()
-def alleger(pos, idx, cible, approx=False, uv=None):
+def alleger(pos, idx, cible, approx=False, uv=None, strict=False, erreur=None):
     with tempfile.TemporaryDirectory() as t:
         json.dump({'pos': pos.ravel().tolist(), 'idx': idx.tolist(), **({'uv': uv.ravel().tolist()} if uv is not None else {})}, open(t + '/a.json', 'w'))
-        print('  ', subprocess.run(['node', os.path.join(racine, 'outils/simplifier.js'), t + '/a.json', t + '/b.json', str(cible)] + (['approx'] if approx else []), capture_output=True, text=True, check=True).stdout.strip())
+        print('  ', subprocess.run(['node', os.path.join(racine, 'outils/simplifier.js'), t + '/a.json', t + '/b.json', str(cible)] + (['approx'] if approx else []), capture_output=True, text=True, check=True, env={**os.environ, **({'UV_STRICT': '1'} if strict else {}), **({'ERREUR_MAX': str(erreur)} if erreur else {})}).stdout.strip())
         return np.array(json.load(open(t + '/b.json')), np.uint32)
 def paquet(m, idx):
     used = np.unique(idx); remap = np.zeros(len(m['pos']), np.uint32); remap[used] = np.arange(len(used))
     return {'n': len(used), 'pos': b64(m['pos'][used].astype('<f4')), 'nor': b64(np.clip(np.round(m['nor'][used] * 127), -127, 127).astype('i1')), 'uv': b64(m['uv'][used].astype('<f4')),
             'os': b64(m['os'][used].astype('u1')), 'poids': b64(np.clip(np.round(m['poids'][used] * 255), 0, 255).astype('u1')), 'idx': b64(remap[idx].astype('<u2')), 'tri': len(idx) // 3}
-def texture(g, cote):
-    im = g.image().resize((cote, cote))
+def texture(g, cote, uv=None, idx=None, passes=40):
+    """Texture réduite. Avec uv et idx (le maillage d'origine) : les couleurs des îlots de texture débordent d'abord sur le
+       vide qui les entoure, pour qu'un triangle allégé qui mord hors de son îlot n'attrape pas le fond de l'image."""
+    im = g.image()
+    if uv is not None:
+        from PIL import Image, ImageDraw
+        W, H = im.size; masque = Image.new('L', (W, H), 0); d = ImageDraw.Draw(masque); P = uv * [W, H]
+        for t in idx.reshape(-1, 3): d.polygon([tuple(P[k]) for k in t], fill=255, outline=255)
+        A = np.asarray(im, np.float32).copy(); plein = np.asarray(masque) > 0
+        for _ in range(passes): # chaque passe étend les îlots d'un pixel, par la moyenne des voisins déjà remplis
+            S = np.zeros_like(A); n = np.zeros(plein.shape, np.float32)
+            for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                S += np.roll(A * plein[..., None], (dy, dx), (0, 1)); n += np.roll(plein, (dy, dx), (0, 1))
+            neuf = ~plein & (n > 0); A[neuf] = S[neuf] / n[neuf][:, None]; plein = plein | neuf
+        im = Image.fromarray(np.clip(A, 0, 255).astype(np.uint8))
+    im = im.resize((cote, cote))
     buf = io.BytesIO(); im.save(buf, 'JPEG', quality=86); return 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
 
-g = Glb(a.src); m = g.maillage()
+g = Glb(a.src); m = g.maillage(); UV0, IDX0 = m['uv'].astype(np.float64), m['idx'].copy() # dépliage d'origine, avant allègement
 if a.squelette: # modèle sans squelette : on le cale sur le soldat animé et chaque sommet prend les os de ses voisins les plus proches
     ref = Glb(a.squelette); mr = ref.maillage(); sq = Squelette(ref); P = m['pos'].astype(np.float64); Q = mr['pos'].astype(np.float64)
     if any('mixamorig' in sq.nom(k) for k in range(len(sq.os))): # soldat en pose A
@@ -58,7 +72,7 @@ if a.squelette: # modèle sans squelette : on le cale sur le soldat animé et ch
 else: sq = Squelette(g)
 noms = [sq.nom(k) for k in range(len(sq.os))]
 Y0 = float((mr if a.squelette else m)['pos'][:, 1].min()); haut = float((mr if a.squelette else m)['pos'][:, 1].max()) - Y0 # hauteur du modèle qui porte le squelette (sol : y = Y0)
-if a.pres and len(m['idx']) // 3 > a.pres: m['idx'] = alleger(m['pos'], m['idx'], a.pres, uv=m['uv']) # modèle trop lourd pour la foule : coutures de texture franchissables
+if a.pres and len(m['idx']) // 3 > a.pres: m['idx'] = alleger(m['pos'], m['idx'], a.pres, uv=m['uv'], strict=a.coutures, erreur=0.003 if a.coutures else None) # modèle trop lourd pour la foule. --coutures : sans franchir les coutures de texture ni trop s'écarter de la forme, quitte à garder plus de triangles que demandé (sinon l'uniforme se déchire en éclats)
 # PORT D'ARME : le bras gauche est figé dans toutes les animations, main à hauteur de hanche sous l'épaule ;
 # le fusil y est fixé, vertical contre l'épaule gauche. Le soldat regarde vers +z, sa gauche est +x, 1,75 m de haut.
 FIXES = {}
@@ -79,7 +93,7 @@ if not a.sans_port:
     FIXES[os_['LeftHand']] = mat_quat(Rav.T @ R_MAIN @ MAIN['Left'].T)
     _G = sq.pose(fixes=FIXES)[1]; print('port d\'arme : coude', np.round(_G[noms.index('mixamorig:LeftForeArm')][:3, 3], 3), 'poignet', np.round(_G[noms.index('mixamorig:LeftHand')][:3, 3], 3))
 print('soldat :', len(m['pos']), 'sommets,', len(m['idx']) // 3, 'triangles, hauteur', round(haut, 3), ',', len(noms), 'os')
-out = {'pres': paquet(m, m['idx']), 'loin': paquet(m, alleger(m['pos'], m['idx'], a.loin, uv=m['uv'] if a.pres else None)), 'tex': texture(g, 1024), 'haut': round(haut, 4)}
+out = {'pres': paquet(m, m['idx']), 'loin': paquet(m, alleger(m['pos'], m['idx'], a.loin, uv=m['uv'] if a.pres else None)), 'tex': texture(g, 1024, UV0, IDX0), 'haut': round(haut, 4)}
 
 # FUSIL : il a son propre os (après ceux du squelette), et la baguette aussi. Au port d'arme, le fusil suit la main gauche,
 # vertical contre l'épaule ; dans les gestes (outils/gestes.py : charge en douze temps, joue, feu, baïonnette), il est posé
@@ -109,7 +123,7 @@ if a.fusil:
     def avec_baguette(idx):
         n0 = len(f['pos']); fb = {c: np.concatenate([f[c], bag[c]]) for c in ('pos', 'nor', 'uv', 'os', 'poids')}
         return paquet(fb, np.concatenate([idx, bidx + n0]))
-    out['fusil'] = {'pres': avec_baguette(alleger(f['pos'], f['idx'], int(os.environ.get('FUSIL_PRES', 1200)), True)), 'loin': paquet(f, alleger(f['pos'], f['idx'], 60, True)), 'tex': texture(Glb(a.fusil), 256)}
+    out['fusil'] = {'pres': avec_baguette(alleger(f['pos'], f['idx'], int(os.environ.get('FUSIL_PRES', 1200)), uv=f['uv'], strict=True)), 'loin': paquet(f, alleger(f['pos'], f['idx'], 60, True)), 'tex': texture(Glb(a.fusil), 512, f['uv'].astype(np.float64), f['idx'])} # de près, les coutures de texture sont respectées
 
 # animations : le jeu veut un soldat de hauteur 1, pieds au sol, qui regarde vers -z
 N = np.diag([-1 / haut, 1 / haut, -1 / haut, 1.0]) @ np.array([[1, 0, 0, 0], [0, 1, 0, -Y0], [0, 0, 1, 0], [0, 0, 0, 1.0]]) # sol à y = 0
