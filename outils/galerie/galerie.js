@@ -28,7 +28,7 @@ const HAUT = 1.8, habiller = (mat, un) => { if (un) mat.onBeforeCompile = sh => 
 const groupes = [];
 function groupe(D, haut, places, clipDe, robe) {
   const M = soldat(D, haut, habiller); if (robe) M.mats.forEach(m => m.color.setHex(robe));
-  const lignes = new THREE.InstancedBufferAttribute(new Float32Array(places.length * 2), 2);
+  const lignes = new THREE.InstancedBufferAttribute(new Float32Array(places.length * 4).fill(1), 4);
   M.pres.forEach((g, gi) => { g.setAttribute('aRow', lignes); const im = new THREE.InstancedMesh(g, M.mats[gi], places.length); im.frustumCulled = false; scene.add(im);
     places.forEach(([x, z], k) => { const o = new THREE.Object3D(); o.position.set(x, 0, z); o.updateMatrix(); im.setMatrixAt(k, o.matrix); }); });
   groupes.push({ M, lignes, n: places.length, clipDe });
@@ -64,6 +64,6 @@ if (q.get('vue')) { const v = q.get('vue').split(',').map(Number); camera.positi
 renderer.setAnimationLoop(now => {
   const t = t0 >= 0 ? t0 : now / 1000;
   groupes.forEach(({ M, lignes, n, clipDe }) => { for (let i = 0; i < n; i++) { let [c, pos] = jouer(M.clips, clipDe(clip), t);
-    if (!c) { c = M.clips.attente; pos = (t * c[2]) % c[1]; } const ia = Math.floor(pos); lignes.array[i * 2] = c[0] + ia + Math.min(0.999, pos - ia); lignes.array[i * 2 + 1] = c[0] + (ia + 1) % c[1]; } lignes.needsUpdate = true; });
+    if (!c) { c = M.clips.attente; pos = (t * c[2]) % c[1]; } const ia = Math.floor(pos); lignes.array[i * 4] = c[0] + ia + Math.min(0.999, pos - ia); lignes.array[i * 4 + 1] = c[0] + (UNE_FOIS.has(clip) || clip === 'salve' && c !== M.clips.attente ? Math.min(ia + 1, c[1] - 1) : (ia + 1) % c[1]); } lignes.needsUpdate = true; });
   ctl.update(); renderer.render(scene, camera);
 });

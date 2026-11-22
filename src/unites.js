@@ -3,13 +3,14 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 /* Soldat animé par la carte graphique : chaque sommet suit ses os, lus dans la table d'animation (uOs),
-   en mélangeant deux images (aRow). À appeler dans onBeforeCompile, avec les uniformes uOs et uHaut. */
+   en mélangeant deux images (aRow.xy). aRow.z, aRow.w : fondu depuis la pose figée aRow.z (w de 0 à 1) quand le geste change. À appeler dans onBeforeCompile, avec les uniformes uOs et uHaut. */
 export function animerShader(sh) {
   sh.vertexShader = sh.vertexShader.replace('#include <common>', `#include <common>
-attribute vec4 aJ; attribute vec4 aW; attribute vec2 aRow; uniform sampler2D uOs; uniform float uHaut;
+attribute vec4 aJ; attribute vec4 aW; attribute vec4 aRow; uniform sampler2D uOs; uniform float uHaut;
 mat4 osM(float j, float l){ int x=int(j+0.5)*3, y=int(l+0.5); vec4 a=texelFetch(uOs,ivec2(x,y),0), b=texelFetch(uOs,ivec2(x+1,y),0), c=texelFetch(uOs,ivec2(x+2,y),0);
-  return mat4(a.x,b.x,c.x,0., a.y,b.y,c.y,0., a.z,b.z,c.z,0., a.w,b.w,c.w,1.); }`)
-    .replace('#include <beginnormal_vertex>', 'float lA=floor(aRow.x),fB=fract(aRow.x);\nmat4 sk=((aW.x*osM(aJ.x,lA)+aW.y*osM(aJ.y,lA)+aW.z*osM(aJ.z,lA)+aW.w*osM(aJ.w,lA))*(1.0-fB)+(aW.x*osM(aJ.x,aRow.y)+aW.y*osM(aJ.y,aRow.y)+aW.z*osM(aJ.z,aRow.y)+aW.w*osM(aJ.w,aRow.y))*fB)/(aW.x+aW.y+aW.z+aW.w);\n#include <beginnormal_vertex>\nobjectNormal=mat3(sk)*objectNormal;')
+  return mat4(a.x,b.x,c.x,0., a.y,b.y,c.y,0., a.z,b.z,c.z,0., a.w,b.w,c.w,1.); }
+mat4 poseM(float l){ return aW.x*osM(aJ.x,l)+aW.y*osM(aJ.y,l)+aW.z*osM(aJ.z,l)+aW.w*osM(aJ.w,l); }`)
+    .replace('#include <beginnormal_vertex>', 'float fB=fract(aRow.x);\nmat4 sk=poseM(floor(aRow.x))*(1.0-fB)+poseM(aRow.y)*fB;\nif(aRow.w<0.999) sk=poseM(aRow.z)*(1.0-aRow.w)+sk*aRow.w;\nsk/=(aW.x+aW.y+aW.z+aW.w);\n#include <beginnormal_vertex>\nobjectNormal=mat3(sk)*objectNormal;')
     .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed=(sk*vec4(transformed,1.0)).xyz*uHaut;');
 }
 

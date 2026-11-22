@@ -42,19 +42,32 @@ def fusil(crosse, bouche, dessous):
     Y = unit(bouche); Z = unit(np.asarray(dessous, float) - np.dot(dessous, Y) * Y); return m4(np.stack([np.cross(Y, Z), Y, Z], 1), crosse)
 
 
+def mains_du_modele(sq, noms, maillage=None):
+    """Pour chaque main : son repère (doigts, paume, pouce) dans le repère de l'os, tiré de la pose de liaison (pose A,
+       paumes vers le corps), et le creux de la main mesuré sur le maillage, depuis le poignet : c'est là que se loge le fusil."""
+    n = {k: sq.os[noms.index('mixamorig:' + k)] for k in ('LeftForeArm', 'LeftHand', 'RightForeArm', 'RightHand')}
+    Gb = sq.globaux(sq.locaux()); main = {}; prise = {}
+    for c in ('Left', 'Right'):
+        W = Gb[n[c + 'Hand']][:3, 3]; f = unit(W - Gb[n[c + 'ForeArm']][:3, 3]); nn = np.cross(f, [0, 0, 1]) if c == 'Left' else np.cross([0, 0, 1], f)
+        main[c] = rot_pure(Gb[n[c + 'Hand']]).T @ base(f, nn); prise[c] = np.array([0.075, 0.035, 0.0])
+        if maillage is not None:
+            ids = [k for k, nm in enumerate(noms) if nm.startswith('mixamorig:' + c + 'Hand')]
+            w = sum((maillage['poids'] * (maillage['os'] == k)).sum(1) for k in ids); P = maillage['pos'][w > 0.6].astype(float)
+            if len(P) > 20:
+                Q = (P - W) @ base(f, nn); ev, vec = np.linalg.eigh(np.cov((Q - Q.mean(0)).T)) # la main n'est pas dans l'axe de l'avant-bras : ses vrais axes
+                B2 = base(vec[:, 2] * np.sign(vec[0, 2]), vec[:, 0] * np.sign(vec[1, 0])); main[c] = main[c] @ B2; Q = Q @ B2; f0, f1 = Q[:, 0].min(), Q[:, 0].max(); paume = Q[(Q[:, 0] > f0 + 0.2 * (f1 - f0)) & (Q[:, 0] < f0 + 0.55 * (f1 - f0))] # la paume, sans les doigts
+                prise[c] = np.array([f0 + 0.45 * (f1 - f0), np.percentile(paume[:, 1], 90) + 0.008, np.median(paume[:, 2])])
+    return main, prise
+
 class Gestes:
-    def __init__(self, sq, noms, fixes, fusil_port):
+    def __init__(self, sq, noms, fixes, fusil_port, maillage=None):
         """fusil_port : matrice du fusil au port d'arme, dans le repère de la main gauche (le fusil la suit)."""
         self.sq, self.fixes, self.Fp = sq, fixes, fusil_port
         self.n = {k: sq.os[noms.index('mixamorig:' + k)] for k in ('Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftArm', 'LeftForeArm', 'LeftHand', 'RightArm', 'RightForeArm', 'RightHand')}
         self.idle = next(c for c in sq.clips if 'idle' in c.lower())
         G = sq.globaux(sq.locaux(self.idle, 0, fixes)); self.G0 = G
         h = G[self.n['Hips']][:3, 3]; self.c = np.array([h[0], 0, h[2]]) # axe du buste
-        # repère « main » : doigts, paume ; tiré de la pose de liaison (pose A, paumes vers le bas et vers le corps)
-        Gb = sq.globaux(sq.locaux()); self.main = {}
-        for c in ('Left', 'Right'):
-            f = unit(Gb[self.n[c + 'Hand']][:3, 3] - Gb[self.n[c + 'ForeArm']][:3, 3]); n = np.cross(f, [0, 0, 1]) if c == 'Left' else np.cross([0, 0, 1], f)
-            self.main[c] = rot_pure(Gb[self.n[c + 'Hand']]).T @ base(f, n) # doigts et paume dans le repère de l'os de la main
+        self.main, self.prise = mains_du_modele(sq, noms, maillage)
         self.port = self.pose_port(G)
 
     # --- repères ---
@@ -84,7 +97,7 @@ class Gestes:
         E = G[self.n[c + 'ForeArm']][:3, 3]; W = G[self.n[c + 'Hand']][:3, 3]; W2 = S + u * L2
         G = self.tourner_os(loc, G, c + 'ForeArm', rot_axe_de(W - E, W2 - E))
         R = cible[:3, :3] @ self.main[c].T @ rot_pure(G[self.n[c + 'Hand']]).T
-        return self.tourner_os(loc, G, c + 'Hand', R), np.linalg.norm(T - W2)
+        return self.tourner_os(loc, G, c + 'Hand', R), T - W2
 
     # --- postures ---
     def tenue(self, spec, F, B, port, c):
@@ -94,7 +107,7 @@ class Gestes:
         k = spec[0]
         if k == 'f':
             Rm = base(spec[2], spec[3]); prise = np.array([0, spec[1], spec[4] if len(spec) > 4 else 0])
-            return F @ m4(Rm, prise - 0.075 * Rm[:, 0] - 0.035 * Rm[:, 1])
+            return F @ m4(Rm, prise - Rm @ self.prise[c])
         if k == 'c':
             Rm = base(spec[2], spec[3]); return B @ m4(Rm, spec[1])
         raise ValueError(spec)
@@ -106,7 +119,7 @@ class Gestes:
             g = 0 if spec == 'r' else spec[1]; return F @ m4(np.diag([-1, -1, 1.0]), [0, LOGE + g, CANON_Z + 0.022])
         if spec[0] == 'k': return F @ m4(np.eye(3), [0, BOUCHE - spec[1], CANON_Z])
         if spec[0] == 'm':
-            Rm = Md[:3, :3]; prise = Md[:3, 3] + 0.075 * Rm[:, 0] + 0.03 * Rm[:, 1]; axe = Rm[:, 2] * spec[2] # le pouce
+            Rm = Md[:3, :3]; prise = Md[:3, 3] + Rm @ (self.prise['Right'] - [0, 0.008, 0]); axe = Rm[:, 2] * spec[2] # le pouce
             Y = -axe; X = unit(np.cross(Y, Rm[:, 0])); return m4(np.stack([X, Y, np.cross(X, Y)], 1), prise + axe * spec[1] * BAGUETTE)
         raise ValueError(spec)
 
@@ -115,7 +128,7 @@ class Gestes:
            Renvoie aussi le fusil et la baguette (repère du modèle) et l'écart des mains à leur cible (m)."""
         i = max(0, min(len(cles) - 2, int(np.searchsorted([k['t'] for k in cles], t, 'right')) - 1))
         k0, k1 = cles[i], cles[i + 1] if len(cles) > 1 else cles[i]
-        s = lisse(float(np.clip((t - k0['t']) / max(1e-6, k1['t'] - k0['t']), 0, 1))) if k1 is not k0 else 0.0
+        s = float(np.clip((t - k0['t']) / max(1e-6, k1['t'] - k0['t']), 0, 1)) if k1 is not k0 else 0.0 # linéaire : les images sont lissées ensuite (LISSAGE), le geste coule d'une clé à l'autre sans s'arrêter
         v = lambda nom, d=0.0: (k0.get(nom, d), k1.get(nom, d))
         mix = lambda nom, d=0.0: np.asarray(v(nom, d)[0], float) * (1 - s) + np.asarray(v(nom, d)[1], float) * s
         sq = self.sq; loc = sq.locaux(clip or self.idle, tc if clip else 0.0, self.fixes); G = sq.globaux(loc)
@@ -131,12 +144,21 @@ class Gestes:
         def pose_fusil(k, B):
             f = k.get('fusil', 'port'); return B @ np.linalg.inv(self.buste(0)) @ self.port['fusil'] if isinstance(f, str) else B @ f
         F = melange(pose_fusil(k0, B0), pose_fusil(k1, B1), s); Bm = self.buste(lacet, depl)
-        # mains : chaque clé place la main (sur le fusil d'aujourd'hui ou dans le buste d'aujourd'hui), puis on mélange
-        ecart = 0; mains = {}
-        for c, cle, cdef in (('Right', 'md', [-1, -0.3, -0.4]), ('Left', 'mg', [1, -0.5, 0])):
-            a, b = v(cle, 'port'); A = self.tenue(a, F, Bm, self.port, c); Bt = self.tenue(b, F, Bm, self.port, c)
-            M = melange(A, Bt, s); co = ry(lacet) @ unit(mix('c' + cle, cdef))
-            G, e = self.bras(loc, G, c, M, co); ecart = max(ecart, e); mains[c] = self.main_virtuelle(G, c)
+        # mains : chaque clé place la main (sur le fusil d'aujourd'hui ou dans le buste d'aujourd'hui), puis on mélange.
+        # Si un bras est trop court pour sa prise, c'est le fusil qui vient à la main : il ne quitte jamais la paume.
+        sur = lambda sp: 1.0 if sp == 'port' or sp[0] == 'f' else 0.0
+        BRAS = (('Right', 'md', [-1, -0.3, -0.4]), ('Left', 'mg', [1, -0.5, 0])); ecart = 0; mains = {}
+        for passe in range(4):
+            manque = np.zeros(3); poids = 0
+            for c, cle, cdef in BRAS:
+                a, b = v(cle, 'port'); A = self.tenue(a, F, Bm, self.port, c); Bt = self.tenue(b, F, Bm, self.port, c)
+                M = melange(A, Bt, s); co = ry(lacet) @ unit(mix('c' + cle, cdef))
+                G, e = self.bras(loc, G, c, M, co); mains[c] = self.main_virtuelle(G, c)
+                w = (sur(a) * (1 - s) + sur(b) * s) if not (c == 'Right' and (a == 'port' or b == 'port')) else 0.0 # au port d'arme, la main droite est libre
+                manque += w * e; poids += w
+            ecart = float(np.linalg.norm(manque) / max(poids, 1e-6)) if poids else 0.0
+            if ecart < 0.002 or passe == 3: break
+            F = F.copy(); F[:3, 3] -= manque / max(poids, 1.0)
         a, b = v('bag', 'r'); Bag = melange(self.baguette(a, F, mains['Right']), self.baguette(b, F, mains['Right']), s)
         return G, F, Bag, ecart
 
@@ -210,3 +232,16 @@ def suites():
     estoc = [cle(0, CROISEZ), cle(0.3, CROISEZ, fusil=pousse, tang=20, lacet=-18), cle(0.5, CROISEZ, fusil=pousse, tang=20, lacet=-18), cle(1.0, CROISEZ)]
     return {'joue': (joue, 20, 1.6, None, False), 'feu': (feu, 20, 1.3, None, False), 'recharge': (rec, 10, 12.2, None, False),
             'estoc': (estoc, 15, 1.0, None, True), 'charge': ([cle(0, CROISEZ)], None, None, 'marche', True), 'assaut': ([cle(0, CROISEZ)], None, None, 'course', True)}
+
+# lissage des images de chaque geste (écart-type en secondes, selon l'instant) : arrondit les angles aux clés sans figer le mouvement
+LISSAGE = {'joue': lambda t: 0.09, 'feu': lambda t: 0.012 if t < 0.3 else 0.09, 'recharge': lambda t: 0.13, 'estoc': lambda t: 0.045}
+def lisser(X, dt, sigma, boucle):
+    """Moyenne glissante gaussienne des images X (n, ...), pas dt. Sans boucle, la fenêtre se resserre aux deux bouts : ils restent exacts."""
+    n = len(X); Y = np.empty_like(X); duree = (n - 1) * dt
+    for i in range(n):
+        t = i * dt; sg = sigma(t)
+        if not boucle: sg = min(sg, min(t, duree - t) / 2.5)
+        if sg < dt / 4: Y[i] = X[i]; continue
+        r = int(np.ceil(3 * sg / dt)); j = np.arange(i - r, i + r + 1); w = np.exp(-0.5 * ((j - i) * dt / sg) ** 2); j = j % n if boucle else np.clip(j, 0, n - 1)
+        Y[i] = np.tensordot(w / w.sum(), X[j], 1)
+    return Y
