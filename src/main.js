@@ -12,6 +12,7 @@ import COSAQUE from './modeles/cosaque.js';
 import CHEVAL from './modeles/cheval-selle.js';
 import { animerShader, soldat, objet, HAUT_CHEVAL, ROBE_LOURD } from './unites.js';
 import { UNITES } from './ordre-de-bataille.js';
+import { creerFumee } from './fumee.js';
 
 /* ===== SCÈNE ===== */
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -82,7 +83,7 @@ function addReg(camp, nom, lat, lon, face, type, h, sorte, opts) { const [x, z] 
   regs.push({ camp, nom, x, z, face, type, sorte: sorte || (type === 'cav' ? 'dragons' : type === 'art' ? 'pied' : 'ligne'), h0: h || (type === 'art' ? pieces * 25 : type === 'cav' ? 150 : 600), pieces, opts, f0: 0, deploi: 0, tirT: 0, max: 0, tx: x, tz: z, tface: face, form: 'colonne', sel: false, moving: false, n: 0, moral: 100, etat: 'ok', recharge: 0, sousFeu: 99, acc: 0, ...ETAT0() }); }
 const figsDe = r => r.type === 'art' ? r.pieces * SERVANTS : Math.max(6, Math.round(r.h0 / ECHELLE));
 const ESP = () => Math.max(0.45, Math.sqrt(ECHELLE / 5)); // espacement des figurines : serré à 1/1, desserré quand une figurine vaut plusieurs hommes
-const ETAT0 = () => ({ tFeu: 99, manoeuvre: 0, desordre: 0, fatigue: 0, charge: null, testCharge: false, melee: null, meleeT: 0, choc: 0, cible: null, assaut: false, issue: null }); // manœuvre, combat rapproché, fatigue
+const ETAT0 = () => ({ tFeu: 99, tFeuVu: 99, aFumer: 0, manoeuvre: 0, desordre: 0, fatigue: 0, charge: null, testCharge: false, melee: null, meleeT: 0, choc: 0, cible: null, assaut: false, issue: null }); // manœuvre, combat rapproché, fatigue
 /* Deux batailles : la démo de Pratzen (par défaut), ou Austerlitz entière avec ?bataille=austerlitz dans l'adresse */
 const BATAILLE = new URLSearchParams(location.search).get('bataille') === 'austerlitz' ? 'austerlitz' : 'pratzen';
 const RABAT = { tirailleurs: 'leger', grenzer: 'leger', pionniers: 'ligne' }; // sortes rabattues sur la plus proche
@@ -119,6 +120,7 @@ CHEVAUX.lourd.mats.forEach(m => m.color.setHex(ROBE_LOURD)); Object.values(CHEVA
 const LOURDS = new Set(['cuirassiers', 'carabiniers', 'garde']);
 const cleCavalier = r => r.sorte === 'cosaques' || !CAVALIERS[r.camp] ? 'cosaque' : r.camp, cleCheval = r => LOURDS.has(r.sorte) ? 'lourd' : 'selle';
 
+let gClip, gLigne, gDe, gFondu; const FONDU = 0.3; // par figurine : geste en cours, dernière image montrée, pose de départ du fondu et son avancement (s)
 let sold, pools = [], provisoire, lointains; // sold : x, z, décalage de pas par figurine
 const matCoat = withMist(new THREE.MeshLambertMaterial({ vertexColors: true })), matRest = withMist(new THREE.MeshLambertMaterial({ vertexColors: true }));
 const POSTES = [[-1.3, 1.6], [1.3, 1.6], [-1.6, 3.2], [1.6, 3.2], [0, 4.8], [0.6, 7]]; // servants autour de leur pièce
@@ -149,12 +151,12 @@ function pool(meshes, lignes) { // lignes : par figurine, les deux images d'anim
   meshes.forEach(m => { m.frustumCulled = false; m.instanceMatrix = meshes[0].instanceMatrix; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); if (lignes) m.geometry.setAttribute('aRow', lignes); scene.add(m); });
   const p = { meshes, M: meshes[0].instanceMatrix.array, R: lignes, n: 0 }; pools.push(p); return p;
 }
-const ligneAnim = n => { const a = new THREE.InstancedBufferAttribute(new Float32Array(n * 2), 2); a.setUsage(THREE.DynamicDrawUsage); return a; };
+const ligneAnim = n => { const a = new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4); a.setUsage(THREE.DynamicDrawUsage); return a; };
 const aPied = r => r.type !== 'cav';
 function build() {
   pools.forEach(p => p.meshes.forEach(m => { scene.remove(m); m.dispose(); })); pools = [];
   let f0 = 0; regs.forEach(r => { r.max = figsDe(r); r.f0 = f0; f0 += r.max; });
-  sold = new Float32Array(f0 * 3); const somme = f => regs.filter(f).reduce((a, r) => a + r.max, 0);
+  sold = new Float32Array(f0 * 3); gClip = new Int32Array(f0).fill(-1); gLigne = new Float32Array(f0); gDe = new Float32Array(f0); gFondu = new Float32Array(f0); const somme = f => regs.filter(f).reduce((a, r) => a + r.max, 0);
   const pools2 = (m, n) => { n = Math.max(1, n); m.pPres = pool(m.pres.map((g, i) => new THREE.InstancedMesh(g, m.mats[i], n)), ligneAnim(n)); m.pLoin = pool(m.loin.map((g, i) => new THREE.InstancedMesh(g, m.mats[i], n)), ligneAnim(n)); };
   for (const camp in MODELES) pools2(MODELES[camp], somme(r => r.camp === camp && aPied(r)));
   for (const k in CAVALIERS) pools2(CAVALIERS[k], somme(r => !aPied(r) && cleCavalier(r) === k));
@@ -302,17 +304,9 @@ const commandable = r => r.n > 0 && r.etat === 'ok' && !(iaAllies && r.camp !== 
 const ecart = (a, b) => ((a - b + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 const cap = (r, e) => Math.atan2(e.x - r.x, -(e.z - r.z)); // direction de r vers e
 
-/* fumée : nuage de points qui montent et s'effacent */
-const NF = 4000, fPos = new Float32Array(NF * 3), fCol = new Float32Array(NF * 4), fVie = new Float32Array(NF); let fK = 0;
-const fGeo = new THREE.BufferGeometry(); fGeo.setAttribute('position', new THREE.BufferAttribute(fPos, 3)); fGeo.setAttribute('color', new THREE.BufferAttribute(fCol, 4));
-{ const cv = document.createElement('canvas'); cv.width = cv.height = 64; const x = cv.getContext('2d'), g = x.createRadialGradient(32, 32, 2, 32, 32, 32);
-  g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = g; x.fillRect(0, 0, 64, 64);
-  var fumee = new THREE.Points(fGeo, new THREE.PointsMaterial({ map: new THREE.CanvasTexture(cv), size: 16, sizeAttenuation: true, vertexColors: true, transparent: true, depthWrite: false, fog: false }));
-  fumee.frustumCulled = false; fumee.renderOrder = 3; scene.add(fumee); }
-function bouffee(x, y, z) { const k = fK = (fK + 1) % NF; fPos[k * 3] = x; fPos[k * 3 + 1] = y; fPos[k * 3 + 2] = z; fVie[k] = 1; }
-function fumeeMaj(dt) { for (let k = 0; k < NF; k++) { if (fVie[k] <= 0) { fCol[k * 4 + 3] = 0; continue; } fVie[k] -= dt / 26; fPos[k * 3 + 1] += dt * 0.55; fPos[k * 3] += dt * 0.5;
-    const g = 0.93; fCol[k * 4] = g; fCol[k * 4 + 1] = g; fCol[k * 4 + 2] = g; fCol[k * 4 + 3] = Math.max(0, fVie[k]) * 0.5; }
-  fGeo.attributes.position.needsUpdate = fGeo.attributes.color.needsUpdate = true; }
+/* fumée des tirs : voir fumee.js (réutilisable : FUM.fusil, FUM.canon, FUM.salve, FUM.panache) */
+const FUM = creerFumee(scene, renderer, camera);
+const BOUCHE = [1.42, 0.15, 1.44]; // bouche du fusil en joue : devant le soldat, à sa droite, hauteur (m)
 
 /* morts laissés sur le terrain */
 let morts = [];
@@ -346,8 +340,7 @@ function salve(r, e, d, bout) { // bout : feu à bout portant sur une charge
   if (mist.uMist.value && altAt(e.x, e.z) < 215) p *= 0.5;              // cible dans la brume
   if (altAt(r.x, r.z) - altAt(e.x, e.z) > 4) p *= 1.15;                 // tir depuis la hauteur
   pertes(e, tireurs * p * conv(r, e), r, coef);
-  const cs = Math.cos(r.face), sn = Math.sin(r.face), w = r.form === 'carre' ? 10 : front(r);
-  for (let k = 0; k < (tir ? 5 : 14); k++) { const lx = (Math.random() - 0.5) * w, x = r.x + lx * cs + sn * 6, z = r.z + lx * sn - cs * 6; bouffee(x, yAt(x, z) + 2.5 + Math.random() * 2, z); }
+  r.aFumer = tir ? 5 : Math.max(8, Math.min(60, Math.round(tireurs / 6))); // la fumée part à l'affichage : de chaque fusil si les hommes sont dessinés, sinon en nappe le long du front
   r.recharge = (tir ? RECHARGE_TIR : RECHARGE) * (0.9 + Math.random() * 0.3); r.tirT = 3; r.tFeu = 0;
 }
 /* artillerie : boulet de loin, mitraille de près ; il faut voir la cible, donc les crêtes et les contre-pentes comptent */
@@ -360,7 +353,7 @@ function canonnade(r, e, d) {
   const flanc = pertes(e, pieces * parPiece, r, 1.5);
   if (flanc && !mitraille && e.type !== 'art' && e.form === 'ligne') pertes(e, pieces * parPiece, r, 0); // enfilade : le boulet prend la ligne dans sa longueur
   const cs = Math.cos(r.face), sn = Math.sin(r.face);
-  for (let g = 0; g < pieces; g++) for (let k = 0; k < 9; k++) { const lx = (g - (r.pieces - 1) / 2) * ECART_PIECES + (Math.random() - 0.5) * 4, av = 4 + Math.random() * 9, x = r.x + lx * cs + sn * av, z = r.z + lx * sn - cs * av; bouffee(x, yAt(x, z) + 2 + Math.random() * 4, z); }
+  for (let g = 0; g < pieces; g++) { const lx = (g - (r.pieces - 1) / 2) * ECART_PIECES, x = r.x + lx * cs + sn * 2.3, z = r.z + lx * sn - cs * 2.3; FUM.canon(x, yAt(x, z) + 1.2 * SC, z, sn, -cs); } // de la bouche de chaque pièce
   r.recharge = RECHARGE_ART * (0.9 + Math.random() * 0.25); r.mitraille = mitraille;
 }
 /* charge à la baïonnette : marche, élan à 80 m, puis épreuve des nerfs avant le contact. Le plus souvent, un camp cède avant le choc. */
@@ -456,12 +449,14 @@ function combat(r, dt) {
 }
 
 /* ===== SIMULATION : on déplace le bataillon, les figurines rejoignent leur place ===== */
+const AVANCE = 0.3, ETALE = 0.22; // la mise en joue et le feu ne sont pas parfaitement ensemble : écarts d'un homme à l'autre (s)
 const D = c => (c[1] - 1) / c[2]; // durée d'un geste joué une seule fois (joue, feu, rechargement)
 const tmp = [0, 0, 0]; let tAnim = 0; const champ = new THREE.Frustum(), mChamp = new THREE.Matrix4(), sphere = new THREE.Sphere();
 function sim(dt) {
   const t = performance.now() / 1000; pools.forEach(p => p.n = 0);
   camera.updateMatrixWorld(); champ.setFromProjectionMatrix(mChamp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
   const dAnim = speed > 0 ? dt / speed * Math.min(speed, 2.5) : 0; tAnim += dAnim; // les jambes ne s'emballent pas en accéléré
+  const dReel = speed > 0 ? dt / speed : 0;
   horloge += dt;
   regs.forEach((r, ri) => {
     if (r.reserve && horloge >= r.arrivee) { r.reserve = false; r.n = r.max; r.snap = true; r.flag.visible = true; avis(`Renforts : ${r.opts.corps || r.nom} entre en ligne.`); } // le renfort arrive
@@ -489,39 +484,47 @@ function sim(dt) {
     const cAvC = mc && (avance && (r.charge || fuite) ? mc.clips.course : mc.clips.attente);
     // gestes de l'infanterie : 1 feu de salve, 2 baïonnette croisée (charge), 3 mêlée, 4 feu à volonté des tirailleurs
     let geste = 0; if (md && md.clips.joue && !cav && r.type !== 'art' && !fuite) geste = r.melee ? 3 : r.charge ? 2 : avance || r.manoeuvre > 0 || r.desordre > 0 ? 0 : r.form === 'tirailleurs' ? (r.tFeu < 12 ? 4 : 0) : 1;
-    const enJoue = geste === 1 && r.recharge < D(md.clips.joue) && r.ennemi && r.dEnn < PORTEE && (r.form === 'carre' || Math.abs(ecart(cap(r, r.ennemi), r.face)) < ARC);
+    const enJoue = geste === 1 && r.recharge < D(md.clips.joue) + AVANCE && r.ennemi && r.dEnn < PORTEE && (r.form === 'carre' || Math.abs(ecart(cap(r, r.ennemi), r.face)) < ARC);
     const rangs = r.form === 'colonne' ? 2 * Math.max(6, Math.ceil(r.max / 10)) : 1e9; // en colonne, seuls les deux premiers rangs tirent
     sphere.center.set(r.x, yAt(r.x, r.z), r.z); sphere.radius = (r.type === 'art' ? 60 : front(r) / 2 + 40) * (fuite ? 2 : 1);
     const vu = champ.intersectsSphere(sphere); if (!vu) r.snap = true; // hors du champ de la caméra : rien à dessiner, les hommes reprendront leur place en revenant
+    const feuVu = r.tFeu < r.tFeuVu ? -1 : r.tFeuVu; r.tFeuVu = r.tFeu; // où en était le feu à l'image précédente : chaque coup ne fume qu'une fois
+    if (r.aFumer) { if (!(vu && (geste === 1 || geste === 4))) { const w = r.form === 'carre' ? 10 : front(r), fx = r.x + sn * 4, fz = r.z - cs * 4; FUM.salve(fx, yAt(fx, fz) + 1.5 * SC, fz, sn, -cs, w, r.aFumer); } r.aFumer = 0; }
     for (let k = 0; vu && k < r.n; k++) {
       const i = r.f0 + k; slot(r, k, tmp); const tourne = tmp[2]; if (fuite) { tmp[0] += (rnd(i, 11) - 0.5) * 9; tmp[1] += (rnd(i, 13) - 0.5) * 9; }
       if (r.melee) { tmp[0] += Math.sin(t * 0.9 + rnd(i, 17) * 6.3) * 1.6; tmp[1] += Math.sin(t * 1.3 + rnd(i, 19) * 6.3) * 1.6 - 3; } // mêlée : les rangs se brisent et se poussent
       toWorld(r, tmp[0], tmp[1], tmp);
-      let x = sold[i * 3], z = sold[i * 3 + 1]; const ex = tmp[0] - x, ez = tmp[1] - z, e = Math.hypot(ex, ez); let bob = 0, fait = 0;
+      let x = sold[i * 3], z = sold[i * 3 + 1]; const ex = tmp[0] - x, ez = tmp[1] - z, e = Math.hypot(ex, ez); let bob = 0, fait = 0, tire = false;
       if (r.snap) { x = tmp[0]; z = tmp[1]; }
       else if (e > 1e-4 && dt > 0) { const st = Math.min(e, vmax * (0.8 + rnd(i, 5) * 0.4)); x += ex / e * st; z += ez / e * st; fait = st; if (!md) bob = Math.abs(Math.sin(t * (cav ? 4 + st / dt : 6) * Math.min(speed, 3) + sold[i * 3 + 2])) * (cav ? 0.18 : 0.12) * SC; }
       if (md) { // en marche, l'animation avance avec le chemin réellement parcouru : les pieds ne glissent pas
-        const C = md.clips, bouge = e > 0.25 || avance; let c = C.attente, pos = -1, boucle = true; // pos < 0 : boucle d'attente, ou marche
+        const C = md.clips, bouge = e > 0.25 || avance; let c = C.attente, pos = -1, boucle = true; tire = false; // pos < 0 : boucle d'attente, ou marche
         if (geste === 3) c = C.estoc;                                     // mêlée : coups de baïonnette
         else if (geste === 2) { if (bouge) c = course ? C.assaut : C.charge; else { c = C.estoc; pos = 0; } } // charge : baïonnette croisée
         else if (bouge) c = course || cav ? C.course : C.marche;         // le cheval qui suit son escadron prend le galop
         else if (geste === 1 && k < rangs) { boucle = false;             // feu de salve : joue, feu, puis chacun recharge à son rythme
-          if (enJoue) { c = C.joue; pos = (D(c) - Math.max(0, r.recharge)) * c[2]; }
-          else if (r.tFeu < D(C.feu)) { c = C.feu; pos = r.tFeu * c[2]; }
-          else { const tr = (r.tFeu - D(C.feu) - rnd(i, 31) * 0.8) * (0.85 + rnd(i, 33) * 0.3); if (tr < D(C.recharge)) { c = C.recharge; pos = Math.max(0, tr) * c[2]; } else boucle = true; } }
+          const dj = D(C.joue), tf = r.tFeu - rnd(i, 39) * ETALE;          // le feu roule le long du rang : chacun a son petit retard
+          if (enJoue) { c = C.joue; pos = Math.max(0, dj + AVANCE - Math.max(0, r.recharge) - rnd(i, 37) * AVANCE) * c[2]; }
+          else if (tf < 0) { c = C.joue; pos = dj * c[2]; }
+          else if (tf < D(C.feu)) { c = C.feu; pos = tf * c[2]; tire = feuVu - rnd(i, 39) * ETALE < 0; }
+          else { const tr = (tf - D(C.feu) - rnd(i, 31) * 0.8) * (0.85 + rnd(i, 33) * 0.3); if (tr < D(C.recharge)) { c = C.recharge; pos = Math.max(0, tr) * c[2]; } else boucle = true; } }
         else if (geste === 4) { const dj = D(C.joue), df = D(C.feu), dr = D(C.recharge), T = dj + df + dr + 3, ts = (tAnim + rnd(i, 35) * T) % T; // tirailleurs : feu à volonté, chacun son tour
-          if (ts < dj + df + dr) { boucle = false; if (ts < dj) { c = C.joue; pos = ts * c[2]; } else if (ts < dj + df) { c = C.feu; pos = (ts - dj) * c[2]; } else { c = C.recharge; pos = (ts - dj - df) * c[2]; } } }
+          if (ts < dj + df + dr) { boucle = false; if (ts < dj) { c = C.joue; pos = ts * c[2]; } else if (ts < dj + df) { c = C.feu; pos = (ts - dj) * c[2]; tire = ts - dAnim < dj; } else { c = C.recharge; pos = (ts - dj - df) * c[2]; } } }
         if (pos < 0) { if (c[3] < 0.05) pos = (tAnim * c[2] + rnd(i, 7) * 40) % c[1]; // sur place
           else { let pas = fait / (c[3] * (md.haut || HAUT)); if (cav) pas = Math.min(pas, dAnim * c[2] / c[1] * 1.6); // à la charge, les jambes ne moulinent pas : le sabot glisse un peu
             sold[i * 3 + 2] = (sold[i * 3 + 2] + pas) % 1; pos = sold[i * 3 + 2] * c[1]; } }
         if (!boucle) pos = Math.min(pos, c[1] - 1);
-        const ia = Math.floor(pos) % c[1]; P.R.array[P.n * 2] = c[0] + ia + Math.min(0.999, pos - Math.floor(pos)); P.R.array[P.n * 2 + 1] = c[0] + (boucle ? (ia + 1) % c[1] : Math.min(ia + 1, c[1] - 1)); }
+        const ia = Math.floor(pos) % c[1], o4 = P.n * 4, R = P.R.array, li = c[0] + ia + Math.min(0.999, pos - Math.floor(pos)); R[o4] = li; R[o4 + 1] = c[0] + (boucle ? (ia + 1) % c[1] : Math.min(ia + 1, c[1] - 1));
+        // le geste change : fondu depuis la dernière pose montrée, figée (pas de saut d'une pose à l'autre)
+        if (r.snap || gClip[i] < 0) gFondu[i] = 9; else if (gClip[i] !== c[0]) { gDe[i] = Math.round(gLigne[i]); gFondu[i] = 0; }
+        gClip[i] = c[0]; gLigne[i] = li; const w = gFondu[i] / FONDU; gFondu[i] += dReel; R[o4 + 2] = gDe[i]; R[o4 + 3] = w >= 1 ? 1 : w * w * (3 - 2 * w); }
       sold[i * 3] = x; sold[i * 3 + 1] = z;
       if (P.coul) { const h = CAMPS[r.camp].lin || (CAMPS[r.camp].lin = new THREE.Color(CAMPS[r.camp].coul)), v = 0.85 + rnd(i, 3) * 0.3; P.C[P.n * 3] = h.r * v; P.C[P.n * 3 + 1] = h.g * v; P.C[P.n * 3 + 2] = h.b * v; } // couleur du camp
       const o = P.n++ * 16, fc = tourne ? Math.cos(r.face + tourne) : cs, fs = tourne ? Math.sin(r.face + tourne) : sn; // rotation autour de la verticale puis position ; en carré, chaque face regarde dehors
+      if (tire) FUM.fusil(x + fs * BOUCHE[0] * SC + fc * BOUCHE[1] * SC, yAt(x, z) + BOUCHE[2] * SC, z - fc * BOUCHE[0] * SC + fs * BOUCHE[1] * SC, fs, -fc, 0.6, r.n > 150); // la fumée sort de son fusil, à l'instant du coup
       M[o] = fc; M[o + 1] = 0; M[o + 2] = fs; M[o + 3] = 0; M[o + 4] = 0; M[o + 5] = 1; M[o + 6] = 0; M[o + 7] = 0;
       M[o + 8] = -fs; M[o + 9] = 0; M[o + 10] = fc; M[o + 11] = 0; M[o + 12] = x; M[o + 13] = yAt(x, z) + bob; M[o + 14] = z; M[o + 15] = 1;
-      if (P2) { const pos = (tAnim * cAvC[2] + rnd(i, 9) * 40) % cAvC[1], ia = Math.floor(pos); P2.R.array[P2.n * 2] = cAvC[0] + ia + Math.min(0.999, pos - ia); P2.R.array[P2.n * 2 + 1] = cAvC[0] + (ia + 1) % cAvC[1]; P2.M.set(M.subarray(o, o + 16), P2.n++ * 16); }
+      if (P2) { const pos = (tAnim * cAvC[2] + rnd(i, 9) * 40) % cAvC[1], ia = Math.floor(pos); P2.R.array[P2.n * 4] = cAvC[0] + ia + Math.min(0.999, pos - ia); P2.R.array[P2.n * 4 + 1] = cAvC[0] + (ia + 1) % cAvC[1]; P2.R.array[P2.n * 4 + 3] = 1; P2.M.set(M.subarray(o, o + 16), P2.n++ * 16); }
     }
     if (vu) r.snap = false;
     const gy = yAt(r.x, r.z); r.flag.position.set(r.x, gy, r.z); r.flag.rotation.y = -r.face; { const dC = Math.hypot(camera.position.x - r.x, camera.position.y - gy, camera.position.z - r.z); r.flag.scale.setScalar(dC < 60 ? 0.001 : Math.min(1, dC / 300)); } // le drapeau de repère rapetisse quand on approche et disparaît à moins de 60 m
@@ -530,9 +533,9 @@ function sim(dt) {
   });
   pools.forEach(p => { p.meshes.forEach(m => m.count = p.n); if (!p.n) return; // n'envoyer à la carte graphique que la partie utilisée des tampons (ils sont dimensionnés pour toute l'armée)
     const env = (att, k) => { att.clearUpdateRanges(); att.addUpdateRange(0, p.n * k); att.needsUpdate = true; };
-    env(p.meshes[0].instanceMatrix, 16); if (p.R) env(p.R, 2); if (p.coul) env(p.meshes[0].instanceColor, 3); });
+    env(p.meshes[0].instanceMatrix, 16); if (p.R) env(p.R, 4); if (p.coul) env(p.meshes[0].instanceColor, 3); });
   canons.forEach(c => c.instanceMatrix.needsUpdate = true);
-  fumeeMaj(dt);
+  FUM.maj(dt);
 }
 
 /* ===== INTERFACE ===== */
@@ -586,5 +589,5 @@ function loop(now) {
     fN = 0; fT = 0; hud(); }
   requestAnimationFrame(loop);
 }
-window.__jeu = { regs, cam, order, ll, yAt, solAt, setForm, sim, setEchelle: e => { ECHELLE = e; }, changerForm, lancerCharge, attaquer, charger, setSpeed, hommes, build, toggleIA: v => { iaAllies = v; } };
+window.__jeu = { FUM, regs, cam, order, ll, yAt, solAt, setForm, sim, setEchelle: e => { ECHELLE = e; }, changerForm, lancerCharge, attaquer, charger, setSpeed, hommes, build, toggleIA: v => { iaAllies = v; } };
 requestAnimationFrame(loop);

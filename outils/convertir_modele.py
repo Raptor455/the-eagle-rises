@@ -65,12 +65,18 @@ FIXES = {}
 if not a.sans_port:
     os_ = {n: sq.os[noms.index('mixamorig:' + n)] for n in ('Spine2', 'LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand')}
     FIXES = {os_['LeftShoulder']: sq.noeuds[os_['LeftShoulder']].get('rotation', [0, 0, 0, 1]), os_['LeftHand']: sq.noeuds[os_['LeftHand']].get('rotation', [0, 0, 0, 1])}
-    COUDE = np.array([0.205, 1.14, 0.045]) * haut / 1.75; POIGNET = np.array([0.215, 0.95, 0.175]) * haut / 1.75
+    COUDE = np.array([0.225, 1.10, -0.02]) * haut / 1.75; POIGNET = np.array([0.185, 0.94, 0.15]) * haut / 1.75
     for nom_os, enfant, cible in (('LeftArm', 'LeftForeArm', COUDE), ('LeftForeArm', 'LeftHand', POIGNET)):
         G = sq.pose(fixes=FIXES)[1]; k = noms.index('mixamorig:' + nom_os); kp = sq.parent[os_[nom_os]]
         Gp = G[sq.os.index(kp)] if kp in sq.os else None
         d = G[noms.index('mixamorig:' + enfant)][:3, 3] - G[k][:3, 3]; R = tourner(d, cible - G[k][:3, 3]) @ G[k][:3, :3]
         FIXES[os_[nom_os]] = mat_quat(np.linalg.inv(Gp[:3, :3]) @ R)
+    # la main gauche en coupe sous la crosse : paume vers le haut, doigts vers l'avant
+    from gestes import mains_du_modele, base, rot_pure
+    MAIN, PRISE = mains_du_modele(sq, noms, m)
+    _Gn = sq.globaux(sq.locaux(fixes=FIXES)); Rav = rot_pure(_Gn[os_['LeftForeArm']])
+    R_MAIN = base([-0.15, 0.3, 1], [-0.3, 1, -0.3]) # doigts, paume (repère du modèle : avant +z, gauche +x)
+    FIXES[os_['LeftHand']] = mat_quat(Rav.T @ R_MAIN @ MAIN['Left'].T)
     _G = sq.pose(fixes=FIXES)[1]; print('port d\'arme : coude', np.round(_G[noms.index('mixamorig:LeftForeArm')][:3, 3], 3), 'poignet', np.round(_G[noms.index('mixamorig:LeftHand')][:3, 3], 3))
 print('soldat :', len(m['pos']), 'sommets,', len(m['idx']) // 3, 'triangles, hauteur', round(haut, 3), ',', len(noms), 'os')
 out = {'pres': paquet(m, m['idx']), 'loin': paquet(m, alleger(m['pos'], m['idx'], a.loin, uv=m['uv'] if a.pres else None)), 'tex': texture(g, 1024), 'haut': round(haut, 4)}
@@ -78,7 +84,7 @@ out = {'pres': paquet(m, m['idx']), 'loin': paquet(m, alleger(m['pos'], m['idx']
 # FUSIL : il a son propre os (après ceux du squelette), et la baguette aussi. Au port d'arme, le fusil suit la main gauche,
 # vertical contre l'épaule ; dans les gestes (outils/gestes.py : charge en douze temps, joue, feu, baïonnette), il est posé
 # à la main et les bras vont le chercher.
-from gestes import Gestes, suites, rot_pure, m4
+from gestes import Gestes, suites, rot_pure, m4, lisser, LISSAGE
 GESTES = a.fusil and not a.sans_port
 if a.fusil:
     f = Glb(a.fusil).maillage(); p = f['pos'].astype(np.float64); L = np.ptp(p[:, 0]); k = 1.9 / L # 1,52 m de fusil et sa baïonnette
@@ -87,7 +93,7 @@ if a.fusil:
     # vertical, un peu penché en avant pour compenser le buste qui se cambre au repos
     R = np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]], float)
     s_, c_ = np.sin(np.radians(4)), np.cos(np.radians(4)); Tl = np.array([[1, 0, 0], [0, c_, -s_], [0, s_, c_]])
-    crosse = poignet + np.array([-0.01, -0.05, 0.05]) * haut / 1.75
+    crosse = poignet + R_MAIN @ PRISE['Left'] - Tl @ np.array([0, 0, 0.05]) if not a.sans_port else poignet # la plaque de couche posée dans le creux de la main
     FUSIL_PORT = np.linalg.inv(Gf[ih]) @ m4(Tl, crosse) # dans le repère de la main gauche
     f['pos'] = (((p - np.array([p[:, 0].max(), 0, 0])) * k) @ R.T).astype(np.float32)
     f['nor'] = f['nor'].astype(np.float64) @ R.T; f['nor'] = (f['nor'] / np.linalg.norm(f['nor'], axis=1, keepdims=True)).astype(np.float32)
@@ -108,7 +114,7 @@ if a.fusil:
 # animations : le jeu veut un soldat de hauteur 1, pieds au sol, qui regarde vers -z
 N = np.diag([-1 / haut, 1 / haut, -1 / haut, 1.0]) @ np.array([[1, 0, 0, 0], [0, 1, 0, -Y0], [0, 0, 1, 0], [0, 0, 0, 1.0]]) # sol à y = 0
 if a.selle: S = np.eye(4); S[:3, 3] = [float(v) for v in a.selle.split(',')]; N = S @ N # en hauteurs du modèle, dans le repère du jeu (avant : -z)
-if a.fusil: GE = Gestes(sq, noms, FIXES, FUSIL_PORT)
+if a.fusil: GE = Gestes(sq, noms, FIXES, FUSIL_PORT, m); print('  creux des mains (doigts, paume, pouce) :', {c: np.round(v, 3).tolist() for c, v in GE.prise.items()})
 def ligne(G):
     """Une image de la table : les os, puis le fusil et la baguette."""
     M, Gos = sq.habillage(G); M = list(M)
@@ -140,11 +146,16 @@ if GESTES:
         if corps: c, t0, d, n = BASE[corps]
         else: c, t0, d = None, 0, duree; n = max(2, int(round(d * ips)))
         Gs = []; pire = 0; clips[nom] = [len(lignes), n, (n if boucle else n - 1) / d]
-        for i in range(n + 1 if corps else n):
-            t = d * i / (n if boucle else n - 1)
-            G, F, B, e = GE.image(cles, 0 if corps else t, c, t0 + t if corps else 0); G['fusil'], G['baguette'] = F, B; pire = max(pire, e)
-            L_, Gos = ligne(G); Gs.append(Gos)
-            if i < n: lignes.append(L_)
+        if corps: # le corps suit la marche ou la course, les bras tiennent la posture
+            for i in range(n + 1):
+                t = d * i / n; G, F, B, e = GE.image(cles, 0, c, t0 + t); G['fusil'], G['baguette'] = F, B; pire = max(pire, e)
+                L_, Gos = ligne(G); Gs.append(Gos)
+                if i < n: lignes.append(L_)
+        else: # geste : calculé quatre fois plus fin, lissé, puis une image sur quatre est gardée
+            FIN = 4; pas = d / (n if boucle else n - 1) / FIN; X = []
+            for i in range(n * FIN if boucle else (n - 1) * FIN + 1):
+                G, F, B, e = GE.image(cles, i * pas); G['fusil'], G['baguette'] = F, B; pire = max(pire, e); X.append(ligne(G)[0])
+            lignes.extend(lisser(np.stack(X), pas, LISSAGE[nom], boucle)[::FIN])
         clips[nom].append(chemin(Gs) if corps else 0)
         print('  geste', nom, ':', n, 'images', ('(corps : ' + corps + ')') if corps else '', '; main la plus loin de sa prise :', round(pire * 100), 'cm')
 T = np.stack(lignes).astype(np.float16) # images x os x 3 lignes x 4
