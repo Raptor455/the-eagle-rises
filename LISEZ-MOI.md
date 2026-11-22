@@ -8,6 +8,7 @@ Combat : feu de salve, pertes, moral, déroute, IA alliée minimale. Artillerie 
 Formations : ligne, colonne, carré, tirailleurs ; changer de formation prend 15 à 45 secondes, sans marche ni feu pendant ce temps.
 Charge à la baïonnette : épreuve des nerfs avant le contact (le défenseur cède, la charge échoue, ou c'est la mêlée), feu à bout portant, fatigue, désordre après le combat.
 Cavalerie : trot, galop sur les 150 derniers mètres, poids de choc selon l'arme (cuirassiers, dragons, hussards, cosaques...). Elle balaie l'infanterie surprise hors du carré, les artilleurs et les fuyards, mais se brise sur un carré.
+Villages : chaque village est découpé en îlots (une poignée de maisons et leurs granges, l'église, le château). L'infanterie peut s'y retrancher : quelques hommes se postent aux angles des maisons, les autres tirent par les fenêtres ; la garnison est à l'abri (30 % des coups portent) mais son feu est plus maigre. On l'en déloge à la baïonnette (course aux murs, portes enfoncées à coups de crosse, combat dans les maisons, le vaincu ressort par l'arrière et le vainqueur s'installe) ou au canon : les boulets arrachent le chaume, les obus mettent le feu, l'incendie gagne les toits voisins sous le vent, chasse la garnison et laisse des ruines qui fument. La cavalerie ne peut rien contre une garnison.
 Effectifs réels : chaque unité a son effectif, et l'échelle (1/1 à 1/20) fixe le nombre d'hommes par figurine.
 Deux batailles : Pratzen (démo) ou Austerlitz entière (`index.html?bataille=austerlitz`, 337 unités, Davout arrive à 90 minutes).
 Fin de bataille quand 60 % des hommes d'une armée sont dans des unités détruites ou en déroute. Pas encore de multijoueur.
@@ -17,8 +18,9 @@ Fin de bataille quand 60 % des hommes d'une armée sont dans des unités détrui
 - Clic droit sur une unité ennemie : l'attaquer (se placer à portée et tirer).
 - `C`, ou Ctrl + clic droit sur l'ennemi : charger à la baïonnette, à 300 m au plus.
 - Cavalerie : clic droit sur l'ennemi pour charger (700 m) ; elle s'approche d'abord si la cible est plus loin.
+- Clic droit sur un bâtiment : l'infanterie va occuper l'îlot (les unités suivantes prennent les îlots voisins) ; s'il est tenu par l'ennemi, elle l'enlève à la baïonnette. L'artillerie choisie le bombarde (900 m au plus). Un ordre de marche ou d'attaque fait ressortir la garnison.
 
-Les réglages (portées, durées des manœuvres, vitesses, vigueur en mêlée, seuil de la charge) sont en tête de la section COMBAT de `src/main.js`.
+Les réglages (portées, durées des manœuvres, vitesses, vigueur en mêlée, seuil de la charge) sont en tête de la section COMBAT de `src/main.js`. Ceux des villages (couvert, feu de la garnison, durée de l'enfoncement des portes, chances de toucher et d'incendier, durée et propagation du feu) sont sur la ligne « villages » de la même section et en tête de `src/villages-combat.js`.
 
 ## Jouer
 Ouvrir `index.html` dans Chrome, Edge ou Firefox. La page contient tout, sans connexion.
@@ -35,6 +37,7 @@ Double-cliquer sur `construire-exe.bat` après chaque mise à jour du code (ou `
 - `src/menu.js` : le menu principal (Échap pour y revenir).
 - `appli/` : la fenêtre du .exe (Electron).
 - `src/carte.js` : la carte : sol, ruisseaux, étangs gelés, routes, villages, faisanderie, et `solAt(x, z)` qui donne la nature du sol (champ, route, eau, glace, village, bois).
+- `src/villages-combat.js` : les villages au combat : postes de la garnison, fumées aux fenêtres, portes enfoncées, toits troués, obus, incendie et ruines (particules et état des bâtiments). Les règles (qui entre, qui cède) sont dans `src/main.js`, section VILLAGES. Les îlots et le matériau qui montre les dégâts sont dans `src/carte.js`.
 - `src/villages.js` : centres et tracés de rues réels des villages (données OpenStreetMap).
 - `src/heights.js` : le relief et les ruisseaux, fabriqués par `python3 outils/relief.py` à partir des images de `donnees/` (les tuiles manquantes sont téléchargées).
 - `outils/meshy/` : génère les modèles avec l'API Meshy à partir d'une liste d'unités (`npm run meshy`), voir `outils/meshy/LISEZ-MOI.md`.

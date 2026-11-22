@@ -13,6 +13,7 @@ import CHEVAL from './modeles/cheval-selle.js';
 import { animerShader, soldat, objet, HAUT_CHEVAL, ROBE_LOURD } from './unites.js';
 import { UNITES } from './ordre-de-bataille.js';
 import { creerFumee } from './fumee.js';
+import { creerVillages } from './villages-combat.js';
 
 /* ===== SCÈNE ===== */
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -42,7 +43,8 @@ function withMist(mat, anim) { // anim : le soldat est animé par la carte graph
 
 /* sol, eau, routes, villages et repères : voir src/carte.js */
 const rnd = (a, b) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); };
-const { ground, labels } = construireCarte(scene, withMist);
+const { ground, labels, ilots } = construireCarte(scene, withMist);
+const V = creerVillages(scene, renderer, camera, ilots, yAt); // villages au combat : garnisons, assauts, incendies (src/villages-combat.js)
 
 /* ===== SOLDATS : une figurine provisoire dessinée une fois, répétée par la carte graphique ===== */
 const SC = 1; // taille des figurines (1 = taille réelle : un fantassin fait 1,80 m)
@@ -80,10 +82,10 @@ let horloge = 0; // secondes de bataille écoulées, pour l'arrivée des renfort
 /* type : 'inf', 'cav' ou 'art' ; hommes : effectif réel ; sorte : ligne, leger, grenadiers, garde, cuirassiers, dragons, hussards... ; opts.pieces pour une batterie */
 function addReg(camp, nom, lat, lon, face, type, h, sorte, opts) { const [x, z] = ll(lat, lon); type = type || 'inf'; opts = opts || {};
   const pieces = type === 'art' ? opts.pieces || 4 : 0;
-  regs.push({ camp, nom, x, z, face, type, sorte: sorte || (type === 'cav' ? 'dragons' : type === 'art' ? 'pied' : 'ligne'), h0: h || (type === 'art' ? pieces * 25 : type === 'cav' ? 150 : 600), pieces, opts, f0: 0, deploi: 0, tirT: 0, max: 0, tx: x, tz: z, tface: face, form: 'colonne', sel: false, moving: false, n: 0, moral: 100, etat: 'ok', recharge: 0, sousFeu: 99, acc: 0, ...ETAT0() }); }
+  regs.push({ camp, nom, x, z, face, type, sorte: sorte || (type === 'cav' ? 'dragons' : type === 'art' ? 'pied' : 'ligne'), h0: h || (type === 'art' ? pieces * 25 : type === 'cav' ? 150 : 600), pieces, opts, f0: 0, deploi: 0, tirT: 0, max: 0, tx: x, tz: z, tface: face, form: 'colonne', sel: false, moving: false, n: 0, moral: 100, etat: 'ok', recharge: 0, sousFeu: 99, acc: 0, garnison: null, ...ETAT0() }); }
 const figsDe = r => r.type === 'art' ? r.pieces * SERVANTS : Math.max(6, Math.round(r.h0 / ECHELLE));
 const ESP = () => Math.max(0.45, Math.sqrt(ECHELLE / 5)); // espacement des figurines : serré à 1/1, desserré quand une figurine vaut plusieurs hommes
-const ETAT0 = () => ({ tFeu: 99, tFeuVu: 99, aFumer: 0, manoeuvre: 0, desordre: 0, fatigue: 0, charge: null, testCharge: false, melee: null, meleeT: 0, choc: 0, cible: null, assaut: false, issue: null }); // manœuvre, combat rapproché, fatigue
+const ETAT0 = () => ({ tFeu: 99, tFeuVu: 99, aFumer: 0, manoeuvre: 0, desordre: 0, fatigue: 0, charge: null, testCharge: false, melee: null, meleeT: 0, choc: 0, cible: null, assaut: false, issue: null, versIlot: null, portes: null, cibleBat: null, meleeIlot: null, dedans: 0, tIlot: 0 }); // manœuvre, combat rapproché, fatigue
 /* Deux batailles : la démo de Pratzen (par défaut), ou Austerlitz entière avec ?bataille=austerlitz dans l'adresse */
 const BATAILLE = new URLSearchParams(location.search).get('bataille') === 'austerlitz' ? 'austerlitz' : 'pratzen';
 const RABAT = { tirailleurs: 'leger', grenzer: 'leger', pionniers: 'ligne' }; // sortes rabattues sur la plus proche
@@ -155,7 +157,7 @@ const ligneAnim = n => { const a = new THREE.InstancedBufferAttribute(new Float3
 const aPied = r => r.type !== 'cav';
 function build() {
   pools.forEach(p => p.meshes.forEach(m => { scene.remove(m); m.dispose(); })); pools = [];
-  let f0 = 0; regs.forEach(r => { r.max = figsDe(r); r.f0 = f0; f0 += r.max; });
+  V.reset(); let f0 = 0; regs.forEach(r => { r.max = figsDe(r); r.f0 = f0; f0 += r.max; r.garnison = null; });
   sold = new Float32Array(f0 * 3); gClip = new Int32Array(f0).fill(-1); gLigne = new Float32Array(f0); gDe = new Float32Array(f0); gFondu = new Float32Array(f0); const somme = f => regs.filter(f).reduce((a, r) => a + r.max, 0);
   const pools2 = (m, n) => { n = Math.max(1, n); m.pPres = pool(m.pres.map((g, i) => new THREE.InstancedMesh(g, m.mats[i], n)), ligneAnim(n)); m.pLoin = pool(m.loin.map((g, i) => new THREE.InstancedMesh(g, m.mats[i], n)), ligneAnim(n)); };
   for (const camp in MODELES) pools2(MODELES[camp], somme(r => r.camp === camp && aPied(r)));
@@ -228,7 +230,7 @@ el.addEventListener('pointerdown', e => {
   if (e.button === 1 || (e.button === 0 && e.altKey)) drag = { t: 'rot', x: e.clientX, y: e.clientY };
   else if (e.button === 0) drag = { t: 'sel', x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, add: e.shiftKey };
   else if (e.button === 2) { const p = groundAt(e.clientX, e.clientY); if (!p) return; const cible = unitePres(p, o => o.n > 0 && regs.some(r => r.sel && chargeable(r, o)));
-    if (cible) attaquer(cible, e.ctrlKey || e.metaKey); else order(p); }
+    if (cible) attaquer(cible, e.ctrlKey || e.metaKey); else { const il = V.ilotA(p.x, p.z); if (!il || !occuper(il)) order(p); } } // sur un bâtiment : l'occuper, ou le bombarder
 });
 el.addEventListener('pointermove', e => {
   if (!drag) return;
@@ -250,7 +252,7 @@ el.addEventListener('pointerup', e => {
 function unitePres(p, test) { let best = null, bd = 50 + cam.dist * 0.025; regs.forEach(r => { const d = Math.hypot(r.x - p.x, r.z - p.z); if (test(r) && d < bd) { bd = d; best = r; } }); return best; }
 const libre = r => commandable(r) && !r.melee; // une unité en mêlée ne peut pas rompre le combat sur ordre
 function order(p) { // marche vers le point : le groupe garde un front perpendiculaire à sa route
-  const S = regs.filter(r => r.sel && libre(r)); if (!S.length) return; S.forEach(r => { r.charge = null; r.testCharge = false; r.cible = null; r.assaut = false; });
+  const S = regs.filter(r => r.sel && libre(r)); if (!S.length) return; S.forEach(r => { sortir(r); r.charge = null; r.testCharge = false; r.cible = null; r.assaut = false; r.versIlot = null; r.portes = null; r.cibleBat = null; });
   const cx = S.reduce((a, r) => a + r.x, 0) / S.length, cz = S.reduce((a, r) => a + r.z, 0) / S.length;
   const f = Math.atan2(p.x - cx, -(p.z - cz)), rx = Math.cos(f), rz = Math.sin(f), fwx = Math.sin(f), fwz = -Math.cos(f);
   S.sort((a, b) => ((a.x - cx) * rx + (a.z - cz) * rz) - ((b.x - cx) * rx + (b.z - cz) * rz));
@@ -260,7 +262,7 @@ function order(p) { // marche vers le point : le groupe garde un front perpendic
     r.tx = Math.max(-WX / 2 + 50, Math.min(WX / 2 - 50, r.tx)); r.tz = Math.max(-WZ / 2 + 50, Math.min(WZ / 2 - 50, r.tz)); });
 }
 /* attaquer : marcher à portée de tir et faire feu ; avec Ctrl (ou la touche C), charger à la baïonnette */
-function attaquer(e, charge) { regs.filter(r => r.sel && libre(r) && chargeable(r, e)).forEach(r => { const assaut = charge || r.type === 'cav'; // la cavalerie n'a qu'une manière d'attaquer
+function attaquer(e, charge) { regs.filter(r => r.sel && libre(r) && chargeable(r, e)).forEach(r => { const assaut = charge || r.type === 'cav'; sortir(r); r.versIlot = null; r.portes = null; r.cibleBat = null; // la cavalerie n'a qu'une manière d'attaquer
   if (assaut && peutCharger(r) && Math.hypot(e.x - r.x, e.z - r.z) < porteeCharge(r)) lancerCharge(r, e); else { r.charge = null; r.cible = e; r.assaut = assaut; } }); hud(); } // trop loin : on s'approche, puis on charge
 function charger() { // chaque unité choisie charge l'ennemi le plus proche devant elle, ou celui qu'elle attaquait
   let n = 0; regs.filter(r => r.sel && libre(r)).forEach(r => { if (!peutCharger(r)) return;
@@ -271,7 +273,7 @@ function charger() { // chaque unité choisie charge l'ennemi le plus proche dev
 }
 function setForm(f) { regs.forEach(r => { if (r.sel && libre(r) && r.type !== 'art' && (r.type === 'inf' || f === 'ligne' || f === 'colonne')) changerForm(r, f); }); hud(); }
 function changerForm(r, f) { // changer de formation prend du temps ; pendant ce temps, ni marche ni feu
-  if (r.form === f || r.charge) return; const d = DUREE_FORM[f] + (r.form === 'tirailleurs' ? 10 : 0) + (r.form === 'ligne' && f === 'carre' ? 10 : 0);
+  if (r.form === f || r.charge || r.garnison || r.portes) return; const d = DUREE_FORM[f] + (r.form === 'tirailleurs' ? 10 : 0) + (r.form === 'ligne' && f === 'carre' ? 10 : 0);
   r.form = f; r.manoeuvre = d * (r.desordre > 0 ? 1.5 : 1) * (r.type === 'cav' ? 0.4 : 1); r.cible = null; // la cavalerie manœuvre vite
 }
 let avisT = 0; function avis(t) { const e = document.getElementById('avis'); e.textContent = t; e.style.display = t ? 'block' : 'none'; avisT = 5; }
@@ -295,6 +297,8 @@ const poids = r => POIDS[r.sorte] || 1;
 const QUALITE = { garde: 1.3, grenadiers: 1.15, carabiniers: 1.1, cuirassiers: 1.1, leger: 1.05, cosaques: 0.9 }; // élan et tenue des troupes d'élite
 const qualite = r => QUALITE[r.sorte] || 1;
 const TENUE_CONTRE_CAV = { carre: 3, ligne: 0.6, colonne: 0.8, tirailleurs: 0.25 }; // seul le carré arrête la cavalerie
+/* villages : garnison à l'abri (voir couvert dans src/villages-combat.js) qui tire moins, portes à enfoncer avant la mêlée, incendie qui chasse la garnison */
+const TIREURS_GARNISON = 0.45, RECHARGE_GARNISON = 9, PORTES = 7, DEFENSE_MURS = 1.2, ASSAUT_MURS = 0.85, FEU_EVACUE = 0.34;
 const PORTEE_ART = 900, MITRAILLE = 250, RECHARGE_ART = 30, ARC_ART = 0.45, MISE_EN_BATTERIE = 40, PIVOT = 12;
 const hommes = r => Math.round(r.n / (r.max || 1) * r.h0);
 const conv = (r, e) => (r.h0 / r.max) / (e.h0 / e.max); // figurines de r -> figurines de e, quand l'échelle diffère d'une unité à l'autre
@@ -327,12 +331,12 @@ function pertes(e, attendu, tireur, coefMoral) { // retire des figurines, laisse
   e.acc += attendu * (0.6 + Math.random() * 0.8); const tues = Math.min(e.n, Math.floor(e.acc)); e.acc -= tues;
   for (let k = 0; k < tues; k++) { const i = e.f0 + (--e.n); tombe(e, sold[i * 3], sold[i * 3 + 1]); }
   const flanc = Math.abs(ecart(cap(e, tireur), e.face)) > 1.05;         // pris de flanc ou à revers : le moral souffre double
-  e.moral -= (tues / e.max * 100 * 1.6 + 1.2) * (flanc && e.form !== 'carre' ? 2 : 1) * (e.manoeuvre > 0 ? 1.3 : 1) * coefMoral; e.sousFeu = 0; return flanc; // le carré n'a pas de flanc ; une unité en manœuvre est fragile
+  e.moral -= (tues / e.max * 100 * 1.6 + 1.2) * (flanc && e.form !== 'carre' && !e.garnison ? 2 : 1) * (e.manoeuvre > 0 ? 1.3 : 1) * coefMoral; e.sousFeu = 0; return flanc; // le carré n'a pas de flanc ; une unité en manœuvre est fragile
 }
 function salve(r, e, d, bout) { // bout : feu à bout portant sur une charge
-  const tir = r.form === 'tirailleurs', tireurs = r.form === 'ligne' ? r.n * 0.85 : r.form === 'carre' ? r.n / 4 * 0.85 : tir ? r.n * 0.9 : Math.min(r.n, 120 * r.max / r.h0); // en colonne, seuls les premiers rangs tirent ; en carré, une seule face
+  const gar = r.garnison, tir = r.form === 'tirailleurs' || !!gar, tireurs = gar ? r.n * TIREURS_GARNISON : r.form === 'ligne' ? r.n * 0.85 : r.form === 'carre' ? r.n / 4 * 0.85 : tir ? r.n * 0.9 : Math.min(r.n, 120 * r.max / r.h0); // en colonne, seuls les premiers rangs tirent ; en carré, une seule face
   let p = tir ? 0.016 - (0.016 - 0.004) * Math.min(1, Math.max(0, (d - 30) / (PORTEE_TIR - 30))) : 0.05 - (0.05 - 0.008) * Math.min(1, Math.max(0, (d - 30) / (PORTEE - 30)));
-  if (e.type !== 'art') p *= FORMES[e.form].cible;                      // colonne et carré denses, tirailleurs dispersés
+  if (e.type !== 'art') p *= e.garnison ? V.couvert(e.garnison, hommes(e)) : FORMES[e.form].cible; // derrière les murs,                    // colonne et carré denses, tirailleurs dispersés
   if (e.type === 'art') p *= 0.25;                                      // servants dispersés autour des pièces
   if (tir && r.moving) p *= 0.5;                                        // les tirailleurs tirent en marchant, moins bien
   if (bout) p *= 1.3;
@@ -340,27 +344,51 @@ function salve(r, e, d, bout) { // bout : feu à bout portant sur une charge
   if (mist.uMist.value && altAt(e.x, e.z) < 215) p *= 0.5;              // cible dans la brume
   if (altAt(r.x, r.z) - altAt(e.x, e.z) > 4) p *= 1.15;                 // tir depuis la hauteur
   pertes(e, tireurs * p * conv(r, e), r, coef);
-  r.aFumer = tir ? 5 : Math.max(8, Math.min(60, Math.round(tireurs / 6))); // la fumée part à l'affichage : de chaque fusil si les hommes sont dessinés, sinon en nappe le long du front
-  r.recharge = (tir ? RECHARGE_TIR : RECHARGE) * (0.9 + Math.random() * 0.3); r.tirT = 3; r.tFeu = 0;
+  if (gar) V.tir(gar, e.x, e.z, 14); else r.aFumer = tir ? 5 : Math.max(8, Math.min(60, Math.round(tireurs / 6))); // la fumée part à l'affichage : de chaque fusil si les hommes sont dessinés, sinon en nappe le long du front
+  r.recharge = (gar ? RECHARGE_GARNISON : tir ? RECHARGE_TIR : RECHARGE) * (0.9 + Math.random() * 0.3); r.tirT = 3; r.tFeu = 0;
 }
 /* artillerie : boulet de loin, mitraille de près ; il faut voir la cible, donc les crêtes et les contre-pentes comptent */
 function enVue(r, e) { const a0 = altAt(r.x, r.z) + 2, a1 = altAt(e.x, e.z) + 2; for (let k = 1; k < 16; k++) { const t = k / 16; if (altAt(r.x + (e.x - r.x) * t, r.z + (e.z - r.z) * t) > a0 + (a1 - a0) * t) return false; } return true; }
 function canonnade(r, e, d) {
   const pieces = Math.ceil(r.n / SERVANTS), mitraille = d < MITRAILLE; // une pièce sans servants se tait
   let parPiece = mitraille ? 0.7 + 1.1 * (1 - d / MITRAILLE) : 0.45 * (1 - 0.65 * (d - MITRAILLE) / (PORTEE_ART - MITRAILLE));
-  if (e.type === 'art') parPiece *= 0.3; else { parPiece *= e.max / 120; if (!mitraille && e.form === 'colonne') parPiece *= 2.2; if (e.form === 'carre') parPiece *= 3.5; if (e.form === 'tirailleurs') parPiece *= 0.3; } // le boulet traverse une colonne dans sa profondeur, et un carré plus encore
+  if (e.type === 'art') parPiece *= 0.3; else if (e.garnison) { parPiece *= e.max / 120 * 0.35; const ob = mitraille ? 0 : obusiers(r, pieces); V.bombarde(e.garnison, r.x, r.z, d, mitraille ? 0 : pieces - ob, ob); } else { parPiece *= e.max / 120; if (!mitraille && e.form === 'colonne') parPiece *= 2.2; if (e.form === 'carre') parPiece *= 3.5; if (e.form === 'tirailleurs') parPiece *= 0.3; } // le boulet traverse une colonne dans sa profondeur, et un carré plus encore
   if (mist.uMist.value && altAt(e.x, e.z) < 215) parPiece *= 0.5;
   const flanc = pertes(e, pieces * parPiece, r, 1.5);
   if (flanc && !mitraille && e.type !== 'art' && e.form === 'ligne') pertes(e, pieces * parPiece, r, 0); // enfilade : le boulet prend la ligne dans sa longueur
-  const cs = Math.cos(r.face), sn = Math.sin(r.face);
-  for (let g = 0; g < pieces; g++) { const lx = (g - (r.pieces - 1) / 2) * ECART_PIECES, x = r.x + lx * cs + sn * 2.3, z = r.z + lx * sn - cs * 2.3; FUM.canon(x, yAt(x, z) + 1.2 * SC, z, sn, -cs); } // de la bouche de chaque pièce
-  r.recharge = RECHARGE_ART * (0.9 + Math.random() * 0.25); r.mitraille = mitraille;
+  fumeeCanons(r, pieces); r.recharge = RECHARGE_ART * (0.9 + Math.random() * 0.25); r.mitraille = mitraille;
+}
+function fumeeCanons(r, pieces) { const cs = Math.cos(r.face), sn = Math.sin(r.face); // de la bouche de chaque pièce
+  for (let g = 0; g < pieces; g++) { const lx = (g - (r.pieces - 1) / 2) * ECART_PIECES, x = r.x + lx * cs + sn * 2.3, z = r.z + lx * sn - cs * 2.3; FUM.canon(x, yAt(x, z) + 1.2 * SC, z, sn, -cs); } }
+/* ===== VILLAGES : occuper un îlot, l'enlever à la baïonnette, le bombarder (effets et incendie : src/villages-combat.js) ===== */
+const obusiers = (r, pieces) => r.opts.calibre === 'obusier' ? pieces : Math.max(1, Math.round(pieces / 4)); // une batterie compte un obusier pour quatre pièces
+function bombarder(r, il, d) { // tir sur les bâtiments : les boulets trouent les toits, les obus mettent le feu ; la garnison souffre peu
+  const pieces = Math.ceil(r.n / SERVANTS), ob = obusiers(r, pieces); V.bombarde(il, r.x, r.z, d, pieces - ob, ob);
+  if (il.occ && il.occ.n > 0 && ennemis(r, il.occ)) pertes(il.occ, pieces * 0.3 * 0.35 * il.occ.max / 120, r, 1.5);
+  fumeeCanons(r, pieces); r.recharge = RECHARGE_ART * (0.9 + Math.random() * 0.25); r.mitraille = false;
+}
+function entrer(r, il) { il.occ = r; r.garnison = il; r.versIlot = null; r.cible = null; r.assaut = false; r.moving = false; r.x = il.x; r.z = il.z; r.tx = r.x; r.tz = r.z; r.manoeuvre = 0; r.tFeu = 99; }
+function sortir(r) { const il = r.garnison; if (!il) return; if (il.occ === r) il.occ = null; r.garnison = null; r.form = 'colonne'; r.desordre = Math.max(r.desordre, 10); } // on ressort par les portes, en désordre
+function evacuer(r, e) { const il = r.garnison, a = e ? cap(e, r) : 0; pertes(r, r.n * 0.04, r, 0); r.moral -= 15; sortir(r); r.desordre = 20; // le feu chasse la garnison, du côté opposé à l'ennemi
+  r.tx = Math.max(-WX / 2 + 60, Math.min(WX / 2 - 60, il.x + Math.sin(a) * (il.r + 60))); r.tz = Math.max(-WZ / 2 + 60, Math.min(WZ / 2 - 60, il.z - Math.cos(a) * (il.r + 60))); r.tface = a + Math.PI; r.moving = true;
+  avis(`${court(r)} évacue ${il.nom} en flammes.`); }
+function occuper(il) { // clic droit sur un bâtiment : l'infanterie va l'occuper (ou l'enlever s'il est tenu), l'artillerie le bombarde
+  const S = regs.filter(r => r.sel && libre(r)), inf = S.filter(r => r.type === 'inf' && r.sorte !== 'etat-major'), arts = S.filter(r => r.type === 'art'); if (!inf.length && !arts.length) return false;
+  const ami = il.occ && !ennemis(S[0], il.occ); let msg = '';
+  arts.forEach(r => { if (ami) msg = `${il.nom} est tenu par nos troupes.`; else if (il.ruines >= 1) msg = `${il.nom} n'est plus que ruines.`; else if (Math.hypot(il.x - r.x, il.z - r.z) > PORTEE_ART) msg = `${il.nom} est hors de portée (${PORTEE_ART} m).`; else { r.cibleBat = il; r.cible = null; msg = `${court(r)} bombarde ${il.nom}.`; } });
+  const pris = new Set(), bon = (c, r) => !pris.has(c) && c.occ !== r && (c.occ ? ennemis(r, c.occ) : V.libre(c));
+  inf.sort((a, b) => Math.hypot(a.x - il.x, a.z - il.z) - Math.hypot(b.x - il.x, b.z - il.z)).forEach(r => { let c = bon(il, r) ? il : null;
+    if (!c) { let bd = 240; for (const o of ilots) { const q = Math.hypot(o.x - il.x, o.z - il.z); if (q < bd && o.village === il.village && bon(o, r)) { bd = q; c = o; } } } // les suivants prennent les îlots voisins
+    if (!c) { if (r.garnison !== il) msg = il.brule ? `${il.nom} est en flammes.` : il.ruines >= 0.6 ? `${il.nom} n'est plus que ruines.` : msg; return; }
+    pris.add(c); sortir(r); r.charge = null; r.testCharge = false; r.portes = null; r.cible = null; r.assaut = false; r.versIlot = c; r.tx = c.x; r.tz = c.z; r.tface = cap(r, c); r.moving = true;
+    msg = c.occ ? `${court(r)} va enlever ${c.nom} à la baïonnette.` : `${court(r)} va occuper ${c.nom}.`; });
+  avis(msg); hud(); return true;
 }
 /* charge à la baïonnette : marche, élan à 80 m, puis épreuve des nerfs avant le contact. Le plus souvent, un camp cède avant le choc. */
 const peutCharger = r => r.type !== 'art' && r.sorte !== 'etat-major' && r.form !== 'carre' && r.manoeuvre <= 0 && r.fatigue < (r.type === 'cav' ? 60 : 75) && !r.melee && r.etat === 'ok';
 const porteeCharge = r => r.type === 'cav' ? PORTEE_CHARGE_CAV : PORTEE_CHARGE;
-const chargeable = (r, o) => o.n > 0 && ennemis(r, o) && (o.etat === 'ok' || (r.type === 'cav' && o.etat === 'deroute')); // la cavalerie sabre aussi les fuyards
-function lancerCharge(r, e) { r.charge = e; r.cible = null; r.testCharge = false; r.moving = true; }
+const chargeable = (r, o) => o.n > 0 && ennemis(r, o) && (o.etat === 'ok' || (r.type === 'cav' && o.etat === 'deroute')) && !(r.type === 'cav' && o.garnison); // la cavalerie n'entre pas dans les maisons ; // la cavalerie sabre aussi les fuyards
+function lancerCharge(r, e) { sortir(r); r.versIlot = null; r.portes = null; r.charge = e; r.cible = null; r.testCharge = false; r.moving = true; }
 function finCharge(r, desordre) { r.charge = null; r.testCharge = false; r.moving = false; r.tx = r.x; r.tz = r.z; r.desordre = Math.max(r.desordre, desordre); }
 function epreuve(r, e) { // le choc a-t-il lieu ? on compare l'élan de l'assaillant à la tenue du défenseur
   const nombre = Math.sqrt(Math.max(1, hommes(r)) / Math.max(1, hommes(e)));
@@ -375,14 +403,16 @@ function epreuve(r, e) { // le choc a-t-il lieu ? on compare l'élan de l'assail
   r.charge = null; r.testCharge = false; r.melee = e; r.choc = 10; e.moral -= 8; if (!e.melee) e.melee = r; e.charge = null; e.cible = null; e.moving = false; return 'mêlée'; // le choc : l'assaillant frappe plus fort les premières secondes
 }
 function melee(r, e, d, dt) {
-  if (d > MELEE_D) { r.tx = e.x - (e.x - r.x) / d * MELEE_D * 0.9; r.tz = e.z - (e.z - r.z) / d * MELEE_D * 0.9; r.tface = cap(r, e); r.moving = true; } else { r.moving = false; r.tface = cap(r, e); }
+  const murs = r.garnison || e.garnison; // combat dans les maisons : l'assaillant reste aux portes, le défenseur tient ses murs
+  if (murs) { r.moving = false; if (e.garnison) { r.dedans = Math.min(0.7, r.dedans + dt * 0.07); if ((r.tIlot -= dt) <= 0) { r.tIlot = 0.2; V.bagarre(murs); } } }
+  else if (d > MELEE_D) { r.tx = e.x - (e.x - r.x) / d * MELEE_D * 0.9; r.tz = e.z - (e.z - r.z) / d * MELEE_D * 0.9; r.tface = cap(r, e); r.moving = true; } else { r.moving = false; r.tface = cap(r, e); }
   r.fatigue = Math.min(100, r.fatigue + dt * 1.5); r.meleeT += dt;
   if (r.meleeT < 1) return; r.meleeT -= 1; // on règle la mêlée seconde par seconde
-  const flanc = e.type !== 'art' && e.form !== 'carre' && Math.abs(ecart(cap(e, r), e.face)) > 1.05;
+  const flanc = e.type !== 'art' && e.form !== 'carre' && !murs && Math.abs(ecart(cap(e, r), e.face)) > 1.05;
   r.choc = Math.max(0, (r.choc || 0) - 1);
   const base = r.type === 'art' ? 0.3 : r.type === 'cav' ? poids(r) * (e.type === 'cav' ? 1 : e.type === 'art' ? 2.5 : e.form === 'carre' ? 0.4 : 3) // le cavalier sabre l'infanterie surprise hors du carré, pas le carré
-    : e.type === 'cav' ? (r.form === 'carre' ? 1.6 : 0.5) : FORMES[r.form].melee;
-  const vigueur = base * (flanc ? 1.5 : 1) * (r.choc > 0 ? 1.6 : 1) * (1 - r.fatigue / (r.type === 'cav' ? 400 : 250));
+    : e.type === 'cav' ? (r.form === 'carre' ? 1.6 : 0.5) : r.garnison ? 1 : FORMES[r.form].melee;
+  const vigueur = base * (r.garnison ? DEFENSE_MURS : e.garnison ? ASSAUT_MURS : 1) * (flanc ? 1.5 : 1) * (r.choc > 0 ? 1.6 : 1) * (1 - r.fatigue / (r.type === 'cav' ? 400 : 250));
   pertes(e, r.n * conv(r, e) * TAUX_MELEE * vigueur, r, 1.2);
   if (hommes(r) < hommes(e) * 0.8 && r.type !== 'cav') r.moral -= 1; // le plus faible en nombre perd pied (le cavalier compte sur son cheval)
 }
@@ -396,7 +426,7 @@ function iaCav(r) { // cavalerie alliée : charger ce qui est vulnérable, sinon
   const e = r.ennemi; if (e && r.dEnn < 1500 && !r.moving && Math.abs(ecart(cap(r, e), r.face)) > 0.3) { r.tx = r.x; r.tz = r.z; r.tface = cap(r, e); r.moving = true; }
 }
 function combat(r, dt) {
-  const art = r.type === 'art', tir = r.form === 'tirailleurs', portee = art ? PORTEE_ART : tir ? PORTEE_TIR : PORTEE;
+  const art = r.type === 'art', gar = r.garnison, tir = r.form === 'tirailleurs' || !!gar, portee = art ? PORTEE_ART : tir ? PORTEE_TIR : PORTEE; // la garnison tire à volonté par les fenêtres
   let e = null, d = 1e9; for (const o of regs) if (o.n > 0 && ennemis(r, o)) { const q = Math.hypot(o.x - r.x, o.z - r.z); if (q < d && (o.etat === 'ok' || q < portee)) { d = q; e = o; } }
   r.ennemi = e; r.dEnn = d; r.recharge -= dt; r.sousFeu += dt; r.tirT -= dt; r.tFeu += dt; r.manoeuvre = Math.max(0, r.manoeuvre - dt); r.desordre = Math.max(0, r.desordre - dt);
   if (!r.charge && !r.melee) r.fatigue = Math.max(0, r.fatigue - dt * (r.moving ? 0.1 : 0.5));
@@ -407,26 +437,40 @@ function combat(r, dt) {
     return;
   }
   if (r.sousFeu > 15) r.moral = Math.min(100 * Math.min(1, r.n / r.max + 0.25), r.moral + dt * 0.35);
-  if (r.n < r.max * 0.15 || (art && r.moral < 20)) { r.n = 0; r.sel = false; r.flag.visible = false; r.ring.visible = false; return; } // bataillon détruit, ou servants qui abandonnent leurs pièces
+  if (r.n < r.max * 0.15 || (art && r.moral < 20)) { sortir(r); r.n = 0; r.sel = false; r.flag.visible = false; r.ring.visible = false; return; } // bataillon détruit, ou servants qui abandonnent leurs pièces
   if (r.moral < 20) {
     if (r.melee && r.melee.n > 0) pertes(r, r.n * 0.06, r.melee, 0); // la poursuite fait des victimes dans le dos des fuyards
+    sortir(r); // la garnison qui cède ressort par l'arrière
     Object.assign(r, ETAT0(), { fatigue: r.fatigue, issue: r.issue }); r.etat = 'deroute'; r.sel = false; r.form = 'colonne'; r.moving = false; r.flag.children[1].material.color.setHex(0xf2f2f2); return;
   }
+  if (gar && (gar.brule > FEU_EVACUE || gar.ruines >= 0.6 || !V.postes(gar).length)) { evacuer(r, e); return; } // l'incendie force la garnison à sortir
   if (r.melee) { // mêlée : on se bat jusqu'à ce qu'un camp cède ; le vainqueur doit se reformer
-    let m = r.melee; if (m.n <= 0 || m.etat !== 'ok') { m = r.melee = regs.find(o => o.melee === r && o.n > 0 && o.etat === 'ok') || null; if (!m) { r.moving = false; r.tx = r.x; r.tz = r.z; r.desordre = 12; r.moral = Math.min(100, r.moral + 6); return; } }
+    let m = r.melee; if (m.n <= 0 || m.etat !== 'ok') { m = r.melee = regs.find(o => o.melee === r && o.n > 0 && o.etat === 'ok') || null; if (!m) { r.moving = false; r.tx = r.x; r.tz = r.z; r.desordre = 12; r.moral = Math.min(100, r.moral + 6); r.dedans = 0;
+        const il = r.meleeIlot; r.meleeIlot = null; if (il && !gar && V.libre(il)) entrer(r, il); return; } } // l'assaillant vainqueur s'installe dans l'îlot conquis
     melee(r, m, Math.hypot(m.x - r.x, m.z - r.z), dt); return;
   }
   if (r.charge) { const c = r.charge, dc = Math.hypot(c.x - r.x, c.z - r.z);
     if (!chargeable(r, c) || dc > porteeCharge(r) + 120 || r.fatigue >= 100) { finCharge(r, 8); return; } // cible enfuie ou hors d'atteinte : on s'arrête
     r.fatigue = Math.min(100, r.fatigue + dt * (r.type === 'cav' ? (dc < ELAN_CAV ? 1.5 : 0.2) : dc < ELAN ? 1 : 0.3)); r.tx = c.x; r.tz = c.z; r.tface = cap(r, c); r.moving = true;
     if (c.etat === 'deroute') { if (dc < 25) { pertes(c, Math.min(c.n, r.n * conv(r, c) * 0.35), r, 0); c.moral -= 10; r.issue = 'sabre'; finCharge(r, 25); } return; } // les fuyards sont sabrés
+    if (c.garnison) { // pas d'épreuve des nerfs contre des murs : on court aux portes
+      if (dc < c.garnison.r + 10) { if (r.moral < 35) { r.moral -= 10; r.issue = 'échoue'; finCharge(r, 15); } else { r.charge = null; r.testCharge = false; r.moving = false; r.tx = r.x; r.tz = r.z; r.issue = null; r.portes = { e: c, il: c.garnison, t: PORTES, c: 0 }; } }
+      return; }
     if (dc < 45 && !r.testCharge) { r.testCharge = true; r.issue = epreuve(r, c); }
+    return;
+  }
+  if (r.portes) { const c = r.portes.e, il = r.portes.il; // on enfonce les portes à coups de crosse, sous le feu des fenêtres
+    if (c.garnison !== il || c.n <= 0 || c.etat !== 'ok') { r.portes = null; r.desordre = 6; if (V.libre(il)) r.versIlot = il; return; } // la garnison a filé : la place est à prendre
+    r.portes.t -= dt; r.fatigue = Math.min(100, r.fatigue + dt); r.moving = false;
+    if ((r.portes.c -= dt) <= 0) { r.portes.c = 0.3; V.coups(il, r.x, r.z); }
+    if (r.moral < 30) { const a = cap(c, r); r.portes = null; r.issue = 'échoue'; r.desordre = 15; r.tx = r.x + Math.sin(a) * 90; r.tz = r.z - Math.cos(a) * 90; r.tface = r.face; r.moving = true; return; } // l'assaut reflue
+    if (r.portes.t <= 0) { V.enfonce(il, r.x, r.z); r.portes = null; r.melee = c; r.meleeIlot = il; r.meleeT = 0; r.choc = 6; r.dedans = 0; r.tIlot = 0; c.moral -= 6; if (!c.melee) c.melee = r; c.cible = null; }
     return;
   }
   // feu à bout portant : une unité chargée garde sa salve pour l'assaillant, s'il est devant elle
   const cav = r.type === 'cav';
-  if (!art && !cav && r.manoeuvre <= 0 && r.desordre <= 0 && r.recharge < 4) for (const o of regs) if (o.charge === r && o.n > 0) { const q = Math.hypot(o.x - r.x, o.z - r.z);
-    if (q < 60 && (r.form === 'carre' || Math.abs(ecart(cap(r, o), r.face)) < 1.2)) { salve(r, o, q, true); break; } }
+  if (!art && !cav && r.manoeuvre <= 0 && r.desordre <= 0 && r.recharge < 4) for (const o of regs) if ((o.charge === r || (o.portes && o.portes.e === r)) && o.n > 0) { const q = Math.hypot(o.x - r.x, o.z - r.z);
+    if (q < (gar ? gar.r + 60 : 60) && (gar || r.form === 'carre' || Math.abs(ecart(cap(r, o), r.face)) < 1.2)) { salve(r, o, q, true); break; } }
   if (r.cible) { const c = r.cible, dc = Math.hypot(c.x - r.x, c.z - r.z), reste = art ? 600 : tir ? 160 : r.assaut ? 0 : 100; // attaquer : se placer à portée, face à la cible
     if (!chargeable(r, c)) r.cible = null;
     else if (r.assaut && peutCharger(r) && r.desordre <= 0 && dc < (cav ? porteeCharge(r) * 0.9 : 150)) { lancerCharge(r, c); return; }
@@ -434,18 +478,32 @@ function combat(r, dt) {
     else if (r.manoeuvre <= 0) { if (dc > reste + 25) { r.tx = c.x - (c.x - r.x) / dc * reste; r.tz = c.z - (c.z - r.z) / dc * reste; r.tface = cap(r, c); r.moving = true; }
       else if (Math.abs(ecart(cap(r, c), r.face)) > 0.3 && !r.moving) { r.tx = r.x; r.tz = r.z; r.tface = cap(r, c); r.moving = true; } }
   }
+  if (r.versIlot) { const il = r.versIlot, di = Math.hypot(il.x - r.x, il.z - r.z); // en route vers un îlot à occuper
+    if (il.occ && il.occ !== r) { r.versIlot = null; if (ennemis(r, il.occ)) { r.cible = il.occ; r.assaut = true; } else { r.moving = false; r.tx = r.x; r.tz = r.z; } } // tenu par l'ennemi : on l'enlève à la baïonnette
+    else if (!V.libre(il)) { r.versIlot = null; r.moving = false; r.tx = r.x; r.tz = r.z; }
+    else if (di < il.r + 12) entrer(r, il);
+    else if (!r.moving && r.manoeuvre <= 0) { r.tx = il.x; r.tz = il.z; r.tface = cap(r, il); r.moving = true; }
+    return; }
+  if (iaAllies && r.camp !== 'fr' && r.type === 'inf' && r.sorte !== 'etat-major' && !gar && !r.cible && e && d < 800 && d > 220 && (r.tIlot -= dt) <= 0) { // IA : se retrancher dans le village voisin quand l'ennemi approche
+    r.tIlot = 3 + Math.random() * 2; let best = null, bd = 260;
+    for (const il of ilots) { const q = Math.hypot(il.x - r.x, il.z - r.z); if (q < bd && V.libre(il) && V.places(il) >= hommes(r) * 0.4 && !regs.some(o => o.versIlot === il)) { bd = q; best = il; } }
+    if (best) { r.versIlot = best; r.tx = best.x; r.tz = best.z; r.tface = cap(r, best); r.moving = true; return; } }
   if (iaAllies && r.camp !== 'fr' && cav) { iaCav(r); return; }
-  if (iaAllies && r.camp !== 'fr' && !art && r.manoeuvre <= 0 && !r.melee) { // l'infanterie forme le carré quand la cavalerie menace, et le rompt ensuite
+  if (iaAllies && r.camp !== 'fr' && !art && !gar && r.manoeuvre <= 0 && !r.melee) { // l'infanterie forme le carré quand la cavalerie menace, et le rompt ensuite
     let dc = 1e9; for (const o of regs) if (o.type === 'cav' && o.n > 0 && o.etat === 'ok' && ennemis(r, o)) dc = Math.min(dc, Math.hypot(o.x - r.x, o.z - r.z) - (o.charge === r ? 200 : 0));
     if (dc < 350 && r.form !== 'carre') { changerForm(r, 'carre'); return; } if (r.form === 'carre' && dc > 700) changerForm(r, 'ligne'); }
-  if (iaAllies && r.camp !== 'fr' && r.form !== 'carre' && e && d < (art ? PORTEE_ART : 450)) { // IA : faire face à la menace, charger un ennemi ébranlé
+  if (iaAllies && r.camp !== 'fr' && !gar && r.form !== 'carre' && e && d < (art ? PORTEE_ART : 450)) { // IA : faire face à la menace, charger un ennemi ébranlé
     if (!art && e.etat === 'ok' && e.type !== 'art' && d < 160 && peutCharger(r) && r.desordre <= 0 && r.moral > 55 && r.fatigue < 50 && (e.moral < 45 || e.manoeuvre > 0 || e.form === 'tirailleurs')) { lancerCharge(r, e); return; }
     if (!art && r.form !== 'ligne' && d > 140 && r.manoeuvre <= 0) changerForm(r, 'ligne');
     if (r.manoeuvre <= 0 && Math.abs(ecart(cap(r, e), r.face)) > (art ? 0.3 : 0.25) && !r.moving) { r.tx = r.x; r.tz = r.z; r.tface = cap(r, e); r.moving = true; } }
+  if (art && r.cibleBat) { const il = r.cibleBat, di = Math.hypot(il.x - r.x, il.z - r.z), da = ecart(cap(r, il), r.face); if (!r.moving) r.deploi -= dt; // ordre de bombarder un îlot
+    if (il.ruines >= 1 || di > PORTEE_ART + 50 || (il.occ && !ennemis(r, il.occ))) r.cibleBat = null;
+    else { r.voit = enVue(r, il); if (Math.abs(da) > ARC_ART * 0.6 && !r.moving) { r.tx = r.x; r.tz = r.z; r.tface = cap(r, il); r.moving = true; }
+      if (r.voit && !r.moving && r.deploi <= 0 && r.recharge <= 0 && Math.abs(da) < ARC_ART) bombarder(r, il, di); return; } }
   if (art) { if (!r.moving) r.deploi -= dt; r.voit = !!e && d < PORTEE_ART && enVue(r, e);
     if (r.voit && !r.moving && r.deploi <= 0 && r.recharge <= 0 && Math.abs(ecart(cap(r, e), r.face)) < ARC_ART) canonnade(r, e, d); return; }
   if (cav) return; // la cavalerie ne tire pas : elle charge
-  if (e && r.manoeuvre <= 0 && r.desordre <= 0 && r.recharge <= 0 && (!r.moving || tir) && (d < portee) && (r.form === 'carre' || Math.abs(ecart(cap(r, e), r.face)) < (tir ? ARC_TIR : ARC))) salve(r, e, d);
+  if (e && r.manoeuvre <= 0 && r.desordre <= 0 && r.recharge <= 0 && (!r.moving || tir) && (d < portee) && (gar || r.form === 'carre' || Math.abs(ecart(cap(r, e), r.face)) < (tir ? ARC_TIR : ARC))) salve(r, e, d);
 }
 
 /* ===== SIMULATION : on déplace le bataillon, les figurines rejoignent leur place ===== */
@@ -469,7 +527,7 @@ function sim(dt) {
       const dx = r.tx - r.x, dz = r.tz - r.z, d = Math.hypot(dx, dz);
       const pente = Math.max(0, (altAt(r.x + dx / (d || 1) * 20, r.z + dz / (d || 1) * 20) - altAt(r.x, r.z)) / 20);
       if (r.type === 'art') r.deploi = d > 1 ? MISE_EN_BATTERIE : Math.max(r.deploi, PIVOT); // bouger oblige à remettre en batterie, pivoter coûte moins
-      const v = fuite ? (r.type === 'cav' ? 6 : 2.8) : r.type === 'art' ? 1.2 * (1 - Math.min(0.65, pente * 6)) : (r.type === 'cav' ? (r.charge ? (d < ELAN_CAV || r.charge.etat !== 'ok' ? 8 : 4.5) : 3.5) * (1 - Math.min(0.4, pente * 3)) : r.charge ? (d < ELAN ? 3.5 : 2) * (1 - Math.min(0.35, pente * 3)) : FORMES[r.form].v * (1 - Math.min(0.5, pente * 4))) * (1 - r.fatigue / 300); // la ligne marche moins vite, la montée ralentit, la fatigue aussi
+      const v = fuite ? (r.type === 'cav' ? 6 : 2.8) : r.type === 'art' ? 1.2 * (1 - Math.min(0.65, pente * 6)) : (r.type === 'cav' ? (r.charge ? (d < ELAN_CAV || r.charge.etat !== 'ok' ? 8 : 4.5) : 3.5) * (1 - Math.min(0.4, pente * 3)) : r.charge ? (d - (r.charge.garnison ? r.charge.garnison.r : 0) < ELAN ? 3.5 : 2) * (1 - Math.min(0.35, pente * 3)) : FORMES[r.form].v * (1 - Math.min(0.5, pente * 4))) * (1 - r.fatigue / 300); // la ligne marche moins vite, la montée ralentit, la fatigue aussi
       const want = d > 15 ? Math.atan2(dx, -dz) : r.tface, da = ecart(want, r.face);
       r.face += Math.sign(da) * Math.min(Math.abs(da), (fuite || r.type === 'cav' ? 1.2 : r.charge || r.melee ? 0.7 : r.form === 'carre' ? 0.6 : 0.35) * dt);
       const bloque = !fuite && !r.charge && !r.melee && r.ennemi && r.dEnn < CONTACT && Math.abs(ecart(cap(r, r.ennemi), Math.atan2(dx, -dz))) < 1.2; // sans ordre de charge, on s'arrête au contact
@@ -477,29 +535,39 @@ function sim(dt) {
       else if (d > 0.5) { const st = Math.min(d, v * dt * (Math.abs(da) > 0.6 && !r.charge ? 0.3 : 1)); r.x += dx / d * st; r.z += dz / d * st; avance = true; }
       else if (fuite || Math.abs(da) < 0.01) r.moving = false;
     }
-    const cav = r.type === 'cav', cs = Math.cos(r.face), sn = Math.sin(r.face), vmax = (cav ? (r.charge ? 9 : fuite ? 7 : 4.5) : fuite || r.charge ? 4.2 : 2.6) * dt, course = fuite || (r.charge && r.dEnn < ELAN);
+    const cav = r.type === 'cav', cs = Math.cos(r.face), sn = Math.sin(r.face), vmax = (cav ? (r.charge ? 9 : fuite ? 7 : 4.5) : fuite || r.charge ? 4.2 : 2.6) * dt, course = fuite || (r.charge && r.dEnn - (r.charge.garnison ? r.charge.garnison.r : 0) < ELAN);
     const dCam = Math.hypot(camera.position.x - r.x, camera.position.z - r.z, camera.position.y - yAt(r.x, r.z)), loin = dCam > LOIN_DIST * detail;
     const md = loin ? null : cav ? CHEVAUX[cleCheval(r)] : MODELES[r.camp], proche = dCam < LOD_DIST * detail, P = loin ? (cav ? lointains.cav : lointains) : !md ? provisoire : proche ? md.pPres : md.pLoin, M = P.M;
     const mc = cav && !loin ? CAVALIERS[cleCavalier(r)] : null, P2 = mc && (proche ? mc.pPres : mc.pLoin); // le cavalier, sur la selle de son cheval
     const cAvC = mc && (avance && (r.charge || fuite) ? mc.clips.course : mc.clips.attente);
     // gestes de l'infanterie : 1 feu de salve, 2 baïonnette croisée (charge), 3 mêlée, 4 feu à volonté des tirailleurs
-    let geste = 0; if (md && md.clips.joue && !cav && r.type !== 'art' && !fuite) geste = r.melee ? 3 : r.charge ? 2 : avance || r.manoeuvre > 0 || r.desordre > 0 ? 0 : r.form === 'tirailleurs' ? (r.tFeu < 12 ? 4 : 0) : 1;
+    const gar = r.garnison, ilA = gar ? null : r.portes ? r.portes.il : r.melee && r.melee.garnison ? r.melee.garnison : null; // îlot tenu, îlot attaqué
+    const postes = gar && V.postes(gar), cibles = ilA && V.proches(ilA, r.x, r.z, 3);
+    let geste = 0; if (md && md.clips.joue && !cav && r.type !== 'art' && !fuite) geste = r.melee || r.portes ? 3 : r.charge ? 2 : gar ? (r.tFeu < 14 ? 4 : 0) : avance || r.manoeuvre > 0 || r.desordre > 0 ? 0 : r.form === 'tirailleurs' ? (r.tFeu < 12 ? 4 : 0) : 1;
     const enJoue = geste === 1 && r.recharge < D(md.clips.joue) + AVANCE && r.ennemi && r.dEnn < PORTEE && (r.form === 'carre' || Math.abs(ecart(cap(r, r.ennemi), r.face)) < ARC);
     const rangs = r.form === 'colonne' ? 2 * Math.max(6, Math.ceil(r.max / 10)) : 1e9; // en colonne, seuls les deux premiers rangs tirent
-    sphere.center.set(r.x, yAt(r.x, r.z), r.z); sphere.radius = (r.type === 'art' ? 60 : front(r) / 2 + 40) * (fuite ? 2 : 1);
+    sphere.center.set(r.x, yAt(r.x, r.z), r.z); sphere.radius = gar ? gar.r + 25 : ilA ? ilA.r * 2 + 40 : (r.type === 'art' ? 60 : front(r) / 2 + 40) * (fuite ? 2 : 1);
     const vu = champ.intersectsSphere(sphere); if (!vu) r.snap = true; // hors du champ de la caméra : rien à dessiner, les hommes reprendront leur place en revenant
     const feuVu = r.tFeu < r.tFeuVu ? -1 : r.tFeuVu; r.tFeuVu = r.tFeu; // où en était le feu à l'image précédente : chaque coup ne fume qu'une fois
     if (r.aFumer) { if (!(vu && (geste === 1 || geste === 4))) { const w = r.form === 'carre' ? 10 : front(r), fx = r.x + sn * 4, fz = r.z - cs * 4; FUM.salve(fx, yAt(fx, fz) + 1.5 * SC, fz, sn, -cs, w, r.aFumer); } r.aFumer = 0; }
     for (let k = 0; vu && k < r.n; k++) {
-      const i = r.f0 + k; slot(r, k, tmp); const tourne = tmp[2]; if (fuite) { tmp[0] += (rnd(i, 11) - 0.5) * 9; tmp[1] += (rnd(i, 13) - 0.5) * 9; }
-      if (r.melee) { tmp[0] += Math.sin(t * 0.9 + rnd(i, 17) * 6.3) * 1.6; tmp[1] += Math.sin(t * 1.3 + rnd(i, 19) * 6.3) * 1.6 - 3; } // mêlée : les rangs se brisent et se poussent
-      toWorld(r, tmp[0], tmp[1], tmp);
+      const i = r.f0 + k; let tourne = 0, cache = false; // cache : la figurine entre dans un bâtiment et ne se dessine plus une fois la porte passée
+      if (gar) { const p = postes[k]; // garnison : quelques hommes aux angles des maisons, les autres à l'intérieur
+        if (p) { tmp[0] = p.x; tmp[1] = p.z; tourne = (r.ennemi && r.dEnn < 400 ? Math.atan2(r.ennemi.x - p.x, -(r.ennemi.z - p.z)) : p.a) - r.face || 1e-6; }
+        else if (gar.bats.length) { const b = gar.bats[k % gar.bats.length]; tmp[0] = b.px; tmp[1] = b.pz; cache = true; } }
+      else if (ilA && cibles.length) { const b = cibles[k % cibles.length]; cache = !!r.melee && rnd(i, 41) < r.dedans; // assaut : on se presse aux portes, puis on s'engouffre
+        V.mur(b, r.x + (rnd(i, 45) - 0.5) * 14, r.z + (rnd(i, 47) - 0.5) * 14, tmp, cache ? 0.2 : 0.7 + rnd(i, 43) * 3 + Math.sin(t * 1.1 + rnd(i, 17) * 6.3) * 0.5);
+        tourne = Math.atan2(b.x - tmp[0], -(b.z - tmp[1])) - r.face || 1e-6; }
+      else { slot(r, k, tmp); tourne = tmp[2]; if (fuite) { tmp[0] += (rnd(i, 11) - 0.5) * 9; tmp[1] += (rnd(i, 13) - 0.5) * 9; }
+        if (r.melee) { tmp[0] += Math.sin(t * 0.9 + rnd(i, 17) * 6.3) * 1.6; tmp[1] += Math.sin(t * 1.3 + rnd(i, 19) * 6.3) * 1.6 - 3; } // mêlée : les rangs se brisent et se poussent
+        toWorld(r, tmp[0], tmp[1], tmp); }
       let x = sold[i * 3], z = sold[i * 3 + 1]; const ex = tmp[0] - x, ez = tmp[1] - z, e = Math.hypot(ex, ez); let bob = 0, fait = 0, tire = false;
-      if (r.snap) { x = tmp[0]; z = tmp[1]; }
+      if (r.snap) { x = tmp[0]; z = tmp[1]; if (cache) { sold[i * 3] = x; sold[i * 3 + 1] = z; continue; } }
+      else if (cache && e < 1.3) continue;
       else if (e > 1e-4 && dt > 0) { const st = Math.min(e, vmax * (0.8 + rnd(i, 5) * 0.4)); x += ex / e * st; z += ez / e * st; fait = st; if (!md) bob = Math.abs(Math.sin(t * (cav ? 4 + st / dt : 6) * Math.min(speed, 3) + sold[i * 3 + 2])) * (cav ? 0.18 : 0.12) * SC; }
       if (md) { // en marche, l'animation avance avec le chemin réellement parcouru : les pieds ne glissent pas
         const C = md.clips, bouge = e > 0.25 || avance; let c = C.attente, pos = -1, boucle = true; tire = false; // pos < 0 : boucle d'attente, ou marche
-        if (geste === 3) c = C.estoc;                                     // mêlée : coups de baïonnette
+        if (geste === 3 && !((ilA || gar) && e > 1.2)) c = C.estoc;       // mêlée : coups de baïonnette (et de crosse dans les portes)
         else if (geste === 2) { if (bouge) c = course ? C.assaut : C.charge; else { c = C.estoc; pos = 0; } } // charge : baïonnette croisée
         else if (bouge) c = course || cav ? C.course : C.marche;         // le cheval qui suit son escadron prend le galop
         else if (geste === 1 && k < rangs) { boucle = false;             // feu de salve : joue, feu, puis chacun recharge à son rythme
@@ -529,22 +597,26 @@ function sim(dt) {
     if (vu) r.snap = false;
     const gy = yAt(r.x, r.z); r.flag.position.set(r.x, gy, r.z); r.flag.rotation.y = -r.face; { const dC = Math.hypot(camera.position.x - r.x, camera.position.y - gy, camera.position.z - r.z); r.flag.scale.setScalar(dC < 60 ? 0.001 : Math.min(1, dC / 300)); } // le drapeau de repère rapetisse quand on approche et disparaît à moins de 60 m
     if (r.type === 'art') for (let g = 0; g < r.pieces; g++) { toWorld(r, (g - (r.pieces - 1) / 2) * ECART_PIECES, 0, tmp); mE.set(0, -r.face, 0); mQ.setFromEuler(mE); mV.set(tmp[0], yAt(tmp[0], tmp[1]), tmp[1]); r.canons.setMatrixAt(r.canon0 + g, mM.compose(mV, mQ, mSC)); }
-    const rad = r.type === 'art' ? 36 : r.form === 'colonne' ? 22 : r.form === 'carre' ? front(r) * 0.75 + 6 : front(r) / 2 + 8; r.ring.visible = r.sel; r.ring.position.set(r.x, gy + 1.5, r.z); r.ring.scale.set(rad, 1, rad);
+    const rad = r.type === 'art' ? 36 : r.form === 'colonne' ? 22 : gar ? gar.r + 4 : r.form === 'carre' ? front(r) * 0.75 + 6 : front(r) / 2 + 8; r.ring.visible = r.sel; r.ring.position.set(r.x, gy + 1.5, r.z); r.ring.scale.set(rad, 1, rad);
   });
   pools.forEach(p => { p.meshes.forEach(m => m.count = p.n); if (!p.n) return; // n'envoyer à la carte graphique que la partie utilisée des tampons (ils sont dimensionnés pour toute l'armée)
     const env = (att, k) => { att.clearUpdateRanges(); att.addUpdateRange(0, p.n * k); att.needsUpdate = true; };
     env(p.meshes[0].instanceMatrix, 16); if (p.R) env(p.R, 4); if (p.coul) env(p.meshes[0].instanceColor, 3); });
   canons.forEach(c => c.instanceMatrix.needsUpdate = true);
-  FUM.maj(dt);
+  FUM.maj(dt); V.maj(dt);
 }
 
 /* ===== INTERFACE ===== */
 const ETATS = { ok: 'en bon ordre', deroute: 'en déroute' };
-function etatArt(r) { return r.moving ? (Math.hypot(r.tx - r.x, r.tz - r.z) > 1 ? 'attelée, en marche' : 'pivote') : r.deploi > 0 ? `mise en batterie (${Math.ceil(r.deploi)} s)` : !r.ennemi || r.dEnn > PORTEE_ART ? 'en batterie, pas de cible' : !r.voit ? 'en batterie, cible masquée par le relief' : Math.abs(ecart(cap(r, r.ennemi), r.face)) > ARC_ART ? 'en batterie, cible hors de l\'axe' : `tire à ${r.dEnn < MITRAILLE ? 'mitraille' : 'boulet'} à ${Math.round(r.dEnn)} m`; }
+function etatArt(r) { return r.cibleBat && !r.moving && r.deploi <= 0 ? (r.voit ? `<b>bombarde</b> ${r.cibleBat.nom}` : `${r.cibleBat.nom} masqué par le relief`) : r.moving ? (Math.hypot(r.tx - r.x, r.tz - r.z) > 1 ? 'attelée, en marche' : 'pivote') : r.deploi > 0 ? `mise en batterie (${Math.ceil(r.deploi)} s)` : !r.ennemi || r.dEnn > PORTEE_ART ? 'en batterie, pas de cible' : !r.voit ? 'en batterie, cible masquée par le relief' : Math.abs(ecart(cap(r, r.ennemi), r.face)) > ARC_ART ? 'en batterie, cible hors de l\'axe' : `tire à ${r.dEnn < MITRAILLE ? 'mitraille' : 'boulet'} à ${Math.round(r.dEnn)} m`; }
 const court = r => r.nom.split(',')[0];
 function etatInf(r) {
   if (r.etat !== 'ok') return ETATS[r.etat];
+  if (r.melee && (r.garnison || r.melee.garnison)) return `<b>combat dans les maisons</b> contre ${court(r.melee)}`;
   if (r.melee) return `<b>en mêlée</b> contre ${court(r.melee)}`;
+  if (r.portes) return `<b>enfonce les portes</b> (${r.portes.il.nom})`;
+  if (r.garnison) return `<b>retranché</b> dans ${r.garnison.nom}${r.garnison.brule ? ', qui brûle' : ''}`;
+  if (r.versIlot) return `va occuper ${r.versIlot.nom}`;
   if (r.charge) return `<b>charge à la baïonnette</b> sur ${court(r.charge)}`;
   if (r.manoeuvre > 0) return `prend la formation (${Math.ceil(r.manoeuvre)} s)`;
   if (r.desordre > 0) return `${r.issue === 'échoue' ? 'charge repoussée, ' : ''}se reforme (${Math.ceil(r.desordre)} s)`;
@@ -561,7 +633,7 @@ function hud() {
   const S = regs.filter(r => r.sel && r.n > 0), e = document.getElementById('sel');
   if (!S.length) e.innerHTML = '<i>Aucune unité sélectionnée</i>';
   else if (S.length === 1) { const r = S[0]; e.innerHTML = r.type === 'art' ? `<b>${r.nom}</b><br>${Math.ceil(r.n / SERVANTS)} pièces · ${hommes(r)} hommes · moral ${Math.max(0, Math.round(r.moral))} · ${etatArt(r)}`
-    : `<b>${r.nom}</b><br>${hommes(r)} ${r.type === 'cav' ? 'cavaliers' : 'hommes'} · moral ${Math.max(0, Math.round(r.moral))} · en ${FORMES[r.form].nom} · ${etatInf(r)}${r.fatigue >= 15 ? ' · fatigue ' + Math.round(r.fatigue) : ''}${r.dEnn < PORTEE_TIR ? ' · ennemi à ' + Math.round(r.dEnn) + ' m' : ''}`; }
+    : `<b>${r.nom}</b><br>${hommes(r)} ${r.type === 'cav' ? 'cavaliers' : 'hommes'} · moral ${Math.max(0, Math.round(r.moral))} · ${r.garnison ? 'à couvert' : 'en ' + FORMES[r.form].nom} · ${etatInf(r)}${r.fatigue >= 15 ? ' · fatigue ' + Math.round(r.fatigue) : ''}${r.dEnn < PORTEE_TIR ? ' · ennemi à ' + Math.round(r.dEnn) + ' m' : ''}`; }
   else e.innerHTML = `<b>${S.length} unités</b> · ${S.reduce((a, r) => a + hommes(r), 0)} hommes · moral moyen ${Math.round(S.reduce((a, r) => a + Math.max(0, r.moral), 0) / S.length)}<br>` + [...new Set(S.map(r => r.nom.split(',')[0]))].slice(0, 6).join(' · ');
   const tot = f => { const R = regs.filter(f); return `${R.reduce((a, r) => a + hommes(r), 0)} h. <small>(${R.filter(r => r.n > 0 && r.etat === 'ok').length}/${R.length} unités)</small>`; };
   document.getElementById('forces').innerHTML = `France ${tot(r => r.camp === 'fr')}<br>Alliés ${tot(r => r.camp !== 'fr')}`; bilan();
@@ -589,5 +661,5 @@ function loop(now) {
     fN = 0; fT = 0; hud(); }
   requestAnimationFrame(loop);
 }
-window.__jeu = { FUM, regs, cam, order, ll, yAt, solAt, setForm, sim, setEchelle: e => { ECHELLE = e; }, changerForm, lancerCharge, attaquer, charger, setSpeed, hommes, build, toggleIA: v => { iaAllies = v; } };
+window.__jeu = { FUM, V, ilots, occuper, entrer, sortir, camera, regs, cam, order, ll, yAt, solAt, setForm, sim, setEchelle: e => { ECHELLE = e; }, changerForm, lancerCharge, attaquer, charger, setSpeed, hommes, build, toggleIA: v => { iaAllies = v; } };
 requestAnimationFrame(loop);

@@ -20,7 +20,7 @@ export function creerFumee(scene, renderer, camera) {
   const geo = new THREE.BufferGeometry(), att = (nom, a, k) => { const b = new THREE.BufferAttribute(a, k); b.setUsage(THREE.DynamicDrawUsage); geo.setAttribute(nom, b); return b; };
   const A = [att('position', pos, 3), att('aVel', vel, 4), att('aVie', vie, 4), att('aCol', col, 4)];
   vie.fill(-1e9); // naissance très ancienne : particule morte
-  const un = { uT: { value: 0 }, uPx: { value: 600 }, uVent: { value: new THREE.Vector3(0.7, 0, 0.25) } };
+  const un = { uT: { value: 0 }, uPx: { value: 600 }, uVent: { value: new THREE.Vector3(1.4, 0, 0.15) } };
   const mat = new THREE.ShaderMaterial({ uniforms: un, transparent: true, depthWrite: false, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor, blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
     vertexShader: `
 attribute vec4 aVel; attribute vec4 aVie; attribute vec4 aCol; uniform float uT, uPx; uniform vec3 uVent; varying vec4 vC; varying float vG, vE;
