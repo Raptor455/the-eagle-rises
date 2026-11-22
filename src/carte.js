@@ -85,6 +85,42 @@ function toit(w, h, d, y, color) { // toit à deux pans, faîte dans la longueur
   g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3)); g.computeVertexNormals(); return teinte(g, color);
 }
 
+/* ---- bâtiments et îlots : ce que les mécaniques de village (src/villages-combat.js) lisent et abîment ----
+   Un bâtiment : boîte au sol (demi-largeur hw sur son axe x, demi-longueur hd sur z, tournée de rot), hauteur de la sablière (hToit) et du faîte (haut),
+   porte (px, pz). Son état est envoyé à la carte graphique par majBati : trous dans le toit (0 à 1, puis les murs s'écrêtent jusqu'à 1,5),
+   braise (rougeoiement) et suie (noircissement). */
+function bati(type, m, rot, hw, hd, hToit, haut, porte) { return { type, x: m.x, z: m.z, y: m.y, rot, cs: Math.cos(rot), sn: Math.sin(rot), hw, hd, hToit, haut, px: porte[0], pz: porte[1], trous: 0, braise: 0, suie: 0, feu: 0, t: 0, refs: [] }; }
+function ilot(nom, village, type, bats) { return cerne({ nom, village, type, bats, occ: null, x: 0, z: 0, r: 0 }); }
+function cerne(il) { const n = il.bats.length; il.x = il.bats.reduce((a, b) => a + b.x, 0) / n; il.z = il.bats.reduce((a, b) => a + b.z, 0) / n; il.r = Math.max(...il.bats.map(b => Math.hypot(b.x - il.x, b.z - il.z) + Math.max(b.hw, b.hd))) + 3; return il; }
+export const horlogeBati = { value: 0 }; // secondes, pour le vacillement des braises
+export function majBati(b) { for (const [att, i] of b.refs) { att.setXYZW(i, b.trous, b.braise, b.suie, b.hToit); att.needsUpdate = true; } }
+const etatBati = (liste, n) => { const att = new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4); att.setUsage(THREE.DynamicDrawUsage); liste.forEach((b, i) => { if (b) { b.refs.push([att, i]); att.setXYZW(i, 0, 0, 0, b.hToit); } }); return att; };
+function avecDegats(mat) { // toit qui se troue par plaques, bords des trous qui rougeoient, murs noircis puis écrêtés
+  const avant = mat.onBeforeCompile; mat.side = THREE.DoubleSide; mat.customProgramCacheKey = () => 'bati';
+  mat.onBeforeCompile = sh => { avant(sh); sh.uniforms.uTemps = horlogeBati;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aEtat; varying vec4 vEtat; varying vec3 vLoc;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvEtat = aEtat; vLoc = position;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec4 vEtat; varying vec3 vLoc; uniform float uTemps; float braiseB;
+float hB(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+float nB(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hB(i), hB(i + vec3(1,0,0)), f.x), mix(hB(i + vec3(0,1,0)), hB(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(hB(i + vec3(0,0,1)), hB(i + vec3(1,0,1)), f.x), mix(hB(i + vec3(0,1,1)), hB(i + vec3(1,1,1)), f.x), f.y), f.z); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+braiseB = 0.0;
+if (vEtat.x + vEtat.y + vEtat.z > 0.0) {
+  float n = nB(vLoc * 0.42 + 3.7) * 0.65 + nB(vLoc * 1.7) * 0.35, toitB = vEtat.w - max(0.0, vEtat.x - 1.0) * 5.0 * nB(vLoc * vec3(0.9, 0.0, 0.9) + 9.1); // au-delà de 1, les murs s'écrêtent
+  float bordB = vEtat.x * 1.25 - 0.12 - n;                                    // > 0 : la plaque de toit est partie
+  if (vLoc.y > toitB && bordB > 0.0) discard;
+  float flam = 0.55 + 0.45 * sin(uTemps * 7.0 + n * 40.0) * sin(uTemps * 3.1 + vLoc.x * 2.0 + vLoc.z);
+  braiseB = vEtat.y * (vLoc.y > toitB ? smoothstep(-0.1, 0.0, bordB) : smoothstep(0.62, 0.85, nB(vLoc * 2.3 + 1.0)) * 0.3) * flam;
+  diffuseColor.rgb *= mix(1.0, 0.1 + 0.25 * n, clamp(vEtat.z * (0.6 + 0.8 * nB(vLoc * 0.8)) + smoothstep(-0.5, 0.0, bordB) * step(0.01, vEtat.x) * 0.7 * step(toitB, vLoc.y), 0.0, 1.0));
+}`)
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(1.0, 0.33, 0.04) * braiseB * 1.6;');
+  };
+  return mat;
+}
+
 /* ---- construction de la scène ---- */
 export function construireCarte(scene, withMist) {
   const labels = [];
@@ -140,7 +176,7 @@ export function construireCarte(scene, withMist) {
   const gEglise = mergeGeometries([boite(10, 8, 22, 0, 4, 0, W), toit(10, 5, 22, 8, 0x6e3b2a), boite(6, 20, 6, 0, 10, -13, W), boite(6.4, 6, 6.4, 0, 22, -13, 0x4e5a52)]);
   const gGrange = mergeGeometries([boite(7.5, 3.6, 12, 0, 1.8, 0, 0x7a6248), toit(7.5, 4.4, 12, 3.6, 0x8d7a52)]);
   const gChateau = mergeGeometries([boite(46, 11, 14, 0, 5.5, 0, 0xe9e2cf), toit(14, 6, 46, 11, 0x7a3f2c).rotateY(Math.PI / 2), boite(12, 14, 16, -19, 7, 0, 0xe9e2cf), boite(12, 14, 16, 19, 7, 0, 0xe9e2cf)]);
-  const maisons = [], granges = [], eglises = [], chateaux = [], arbres = [], lots = [], gRues = [];
+  const maisons = [], granges = [], eglises = [], chateaux = [], arbres = [], lots = [], gRues = [], ilots = [];
   VILLAGES.forEach(v => {
     const cx = v.x, cz = v.z, segs = [], cands = [], ms = [], gs = [], clos = [];
     for (const r of v.rues) {
@@ -148,8 +184,8 @@ export function construireCarte(scene, withMist) {
       for (let k = 0; k < r.length - 1; k++) segs.push([r[k][0], r[k][1], r[k + 1][0], r[k + 1][1]]);
     }
     const rue = (x, z) => { let d = 1e9; for (const s of segs) d = Math.min(d, distSeg(x, z, s)); return d; };
-    if (v.eglise) { const [x, z] = ll(...v.eglise); if (!horsCarte(x, z)) { eglises.push({ x, z, a: 0, y: yAt(x, z) }); clos.push([x, z, 24]); marque(x, z, 14, 'village'); } } // chœur à l'est, clocher à l'ouest
-    if (v.chateau) { const [x, z] = ll(...v.chateau); chateaux.push({ x, z, a: 0, y: Math.min(yAt(x, z), yAt(x + 20, z), yAt(x - 20, z)) }); clos.push([x, z, 48]); marque(x, z, 26, 'village'); label('Château', x, z); }
+    if (v.eglise) { const [x, z] = ll(...v.eglise); if (!horsCarte(x, z)) { eglises.push({ x, z, a: 0, y: yAt(x, z), v }); clos.push([x, z, 24]); marque(x, z, 14, 'village'); } } // chœur à l'est, clocher à l'ouest
+    if (v.chateau) { const [x, z] = ll(...v.chateau); chateaux.push({ x, z, a: 0, y: Math.min(yAt(x, z), yAt(x + 20, z), yAt(x - 20, z)), v }); clos.push([x, z, 48]); marque(x, z, 26, 'village'); label('Château', x, z); }
     v.rues.forEach((r, ri) => { // une place de maison tous les 15 m, des deux côtés de chaque rue
       let fait = 0, suiv = 7.5;
       for (let k = 0; k < r.length - 1; k++) {
@@ -157,7 +193,7 @@ export function construireCarte(scene, withMist) {
         for (; suiv <= fait + l; suiv += 14.6 + rnd(suiv, ri + cx) * 1.6) for (const cote of [-1, 1]) {
           const t = suiv - fait, px = r[k][0] + ux * t, pz = r[k][1] + uz * t, pignon = rnd(px * cote, pz) < 0.14, rec = pignon ? 11.5 + rnd(pz, px * cote) * 1.5 : 8.6 + rnd(pz, px * cote) * 2;
           const x = px - uz * cote * rec, z = pz + ux * cote * rec;
-          if (rue(x, z) > rec - 0.5) cands.push({ x, z, nx: -uz * cote, nz: ux * cote, ux, uz, a: Math.atan2(uz, ux) + (pignon ? 0 : -Math.PI / 2) + (rnd(x, z) - 0.5) * 0.06, d: Math.hypot(x - cx, z - cz) });
+          if (rue(x, z) > rec - 0.5) cands.push({ x, z, nx: -uz * cote, nz: ux * cote, ux, uz, pg: pignon, a: Math.atan2(uz, ux) + (pignon ? 0 : -Math.PI / 2) + (rnd(x, z) - 0.5) * 0.06, d: Math.hypot(x - cx, z - cz) });
         }
         fait += l;
       }
@@ -171,10 +207,19 @@ export function construireCarte(scene, withMist) {
     for (const m of ms) marque(m.x, m.z, 9, 'village');
     ms.forEach((m, i) => { // granges en travers au fond des cours, vergers derrière
       if (rnd(m.x, i) < 0.6) { const k = 21 + rnd(i, 7) * 5, o = (rnd(7, i) - 0.5) * 5, x = m.x + m.nx * k + m.ux * o, z = m.z + m.nz * k + m.uz * o;
-        if (solAt(x, z) === 'champ' && rue(x, z) > 11 && !presRoute(x, z, 9) && !clos.some(c => Math.hypot(c[0] - x, c[1] - z) < c[2]) && !ms.some(q => Math.hypot(q.x - x, q.z - z) < 12) && !gs.some(q => Math.hypot(q.x - x, q.z - z) < 13)) gs.push({ x, z, a: Math.atan2(m.uz, m.ux) - Math.PI / 2 + (rnd(x, z) - 0.5) * 0.15, y: Math.min(yAt(x - 5, z - 5), yAt(x + 5, z + 5), yAt(x, z)) }); }
+        if (solAt(x, z) === 'champ' && rue(x, z) > 11 && !presRoute(x, z, 9) && !clos.some(c => Math.hypot(c[0] - x, c[1] - z) < c[2]) && !ms.some(q => Math.hypot(q.x - x, q.z - z) < 12) && !gs.some(q => Math.hypot(q.x - x, q.z - z) < 13)) gs.push({ x, z, m, a: Math.atan2(m.uz, m.ux) - Math.PI / 2 + (rnd(x, z) - 0.5) * 0.15, y: Math.min(yAt(x - 5, z - 5), yAt(x + 5, z + 5), yAt(x, z)) }); }
       for (let q = 0; q < 2; q++) if (rnd(m.x + q, i + 3) < 0.45) { const k = 36 + rnd(i, 9 + q) * 22, o = (rnd(9 + q, i) - 0.5) * 12, x = m.x + m.nx * k + m.ux * o, z = m.z + m.nz * k + m.uz * o; if (solAt(x, z) === 'champ' && rue(x, z) > 8) arbres.push([x, z, 0.8]); }
     });
     for (const g of gs) { marque(g.x, g.z, 8, 'village'); granges.push(g); }
+    { /* îlots : une poignée de maisons voisines (et leurs granges) qu'une unité peut occuper, attaquer ou incendier */
+      const libres = new Set(ms); let no = 0;
+      for (const g0 of ms) { if (!libres.has(g0)) continue;
+        const pres = [...libres].map(m => [Math.hypot(m.x - g0.x, m.z - g0.z), m]).filter(q => q[0] < 40).sort((p, q) => p[0] - q[0]).slice(0, 8).map(q => q[1]);
+        const bats = pres.map(m => { libres.delete(m); return (m.b = bati('maison', m, -m.a, 3.47, 6.5, 3.5, 8.3, [m.x - m.nx * (m.pg ? 6.9 : 3.9), m.z - m.nz * (m.pg ? 6.9 : 3.9)])); });
+        ilots.push(ilot(`${v.nom}, îlot ${++no}`, v.nom, 'maisons', bats)); pres.forEach(m => m.il = ilots[ilots.length - 1]); }
+      for (const g of gs) { const il = g.m.il; g.b = bati('grange', g, -g.a, 3.75, 6, 3.6, 8, [g.x + Math.cos(g.a) * 4.2, g.z + Math.sin(g.a) * 4.2]); il.bats.push(g.b); }
+      for (const il of ilots) if (il.village === v.nom) cerne(il);
+    }
     ms.sort((p, q) => (Math.floor(p.x / 160) - Math.floor(q.x / 160)) || (p.z - q.z)); // paquets de maisons voisines, pour le détail de près
     for (let i = 0; i < ms.length; i += 40) lots.push({ ms: ms.slice(i, i + 40) });
     maisons.push(...ms); v.maisons = ms.length;
@@ -183,19 +228,24 @@ export function construireCarte(scene, withMist) {
   if (gRues.length) scene.add(new THREE.Mesh(mergeGeometries(gRues), matRuban(withMist, 0x7d6f58)));
   for (const [nom, la, lo] of HAUTEURS) { const [x, z] = ll(la, lo); label(nom, x, z, true); }
 
+  for (const e of eglises) { e.b = bati('eglise', e, Math.PI / 2, 5, 11, 8, 13, [e.x - 17.5, e.z]); ilots.push(ilot(`Église de ${e.v.nom}`, e.v.nom, 'eglise', [e.b])); }
+  for (const c of chateaux) { c.b = bati('chateau', c, 0, 23, 8, 11, 17, [c.x, c.z + 9]); ilots.push(ilot(`Château de ${c.v.nom}`, c.v.nom, 'chateau', [c.b])); }
   const matBati = withMist(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+  const matBatiD = avecDegats(withMist(new THREE.MeshLambertMaterial({ vertexColors: true })));
+  const partage = g => { const c = new THREE.BufferGeometry(); for (const k in g.attributes) c.setAttribute(k, g.attributes[k]); c.setIndex(g.index); return c; }; // même maillage, état propre à chaque paquet
   const mM = new THREE.Matrix4(), mQ = new THREE.Quaternion(), mV = new THREE.Vector3(), mS = new THREE.Vector3(1, 1, 1), Y = new THREE.Vector3(0, 1, 0), col = new THREE.Color();
   const prochesMaj = []; // maisons : le modèle détaillé près de la caméra, la version à 18 triangles au loin, par paquets de 40 maisons voisines
-  { const M = objet(MAISON, withMist);
-    for (const { ms } of lots) {
-      const paire = [M.loin, M.pres].map(g => { const im = new THREE.InstancedMesh(g, M.mat, ms.length);
+  { const M = objet(MAISON, withMist); avecDegats(M.mat);
+    for (const { ms } of lots) { const etat = etatBati(ms.map(m => m.b), ms.length);
+      const paire = [M.loin, M.pres].map(g => { g = partage(g); g.setAttribute('aEtat', etat); const im = new THREE.InstancedMesh(g, M.mat, ms.length);
         ms.forEach((m, i) => { mQ.setFromAxisAngle(Y, -m.a); im.setMatrixAt(i, mM.compose(mV.set(m.x, m.y, m.z), mQ, mS)); im.setColorAt(i, col.setScalar(0.82 + m.c * 0.3)); });
         im.computeBoundingSphere(); scene.add(im); return im; });
       const s = paire[0].boundingSphere; paire[1].visible = false; prochesMaj.push({ x: s.center.x, z: s.center.z, y: s.center.y, r: 220 + s.radius, loin: paire[0], pres: paire[1] });
     }
   }
   for (const [g, liste, tour] of [[gEglise, eglises, Math.PI / 2], [gGrange, granges, 0], [gChateau, chateaux, 0]]) { if (!liste.length) continue;
-    const im = new THREE.InstancedMesh(g, matBati, liste.length); liste.forEach((m, i) => { mQ.setFromAxisAngle(Y, -m.a + tour); im.setMatrixAt(i, mM.compose(mV.set(m.x, m.y, m.z), mQ, mS)); im.setColorAt(i, col.setScalar(0.85 + rnd(m.x, m.z) * 0.25)); }); scene.add(im); }
+    g.setAttribute('aEtat', etatBati(liste.map(m => m.b), liste.length));
+    const im = new THREE.InstancedMesh(g, matBatiD, liste.length); liste.forEach((m, i) => { mQ.setFromAxisAngle(Y, -m.a + tour); im.setMatrixAt(i, mM.compose(mV.set(m.x, m.y, m.z), mQ, mS)); im.setColorAt(i, col.setScalar(0.85 + rnd(m.x, m.z) * 0.25)); }); scene.add(im); }
 
   /* faisanderie de Sokolnitz : bois clos d'un mur */
   { const f = FAISANDERIE, [fx, fz] = ll(f.lat, f.lon), c = Math.cos(f.ang), s = Math.sin(f.ang);
@@ -301,5 +351,5 @@ vec3 lin(vec3 c){ return pow(c, vec3(2.2)); }`)
   };
   const ground = new THREE.Mesh(g, mat); scene.add(ground);
   ground.onBeforeRender = (_r, _s, cam) => { for (const v of prochesMaj) { const p = Math.hypot(cam.position.x - v.x, cam.position.y - v.y, cam.position.z - v.z) < v.r; v.pres.visible = p; v.loin.visible = !p; } };
-  return { ground, labels };
+  return { ground, labels, ilots };
 }
