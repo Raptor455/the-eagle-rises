@@ -6,6 +6,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { HW, HH, H64, CADRE, RUISSEAUX } from './heights.js';
 import MAISON from './modeles/maison.js';
 import { objet } from './unites.js';
+import { VILLAGES, RUES } from './villages.js';
 
 export const TILE = CADRE.tuile, WX = (CADRE.x1 - CADRE.x0) * TILE, WZ = (CADRE.y1 - CADRE.y0) * TILE, VE = 1, H0 = 180; // VE : grossissement du relief à l'affichage (1 = taille réelle)
 const N = 2 ** CADRE.z;
@@ -24,8 +25,8 @@ export const yAt = (x, z) => (altAt(x, z) - H0) * VE;
 
 /* ---- étangs gelés de Satschan et de Menitz (forme approximative) : la glace est plate ---- */
 const ETANGS = [
-  { nom: 'Étang de Satschan', lat: 49.0835, lon: 16.7390, rx: 900, rz: 330, ang: 0.25 },
-  { nom: 'Étang de Menitz', lat: 49.0770, lon: 16.7110, rx: 650, rz: 260, ang: -0.35 },
+  { nom: 'Étang de Satschan', lat: 49.0965, lon: 16.7385, rx: 1250, rz: 420, ang: 0.1 },
+  { nom: 'Étang de Menitz', lat: 49.0800, lon: 16.7120, rx: 600, rz: 300, ang: -0.2 },
 ];
 for (const e of ETANGS) {
   [e.x, e.z] = ll(e.lat, e.lon);
@@ -48,16 +49,7 @@ function marque(x, z, r, sol) { const k = SOLS.indexOf(sol), i0 = Math.floor((x 
   for (let j = Math.max(0, j0); j <= Math.min(GH - 1, j1); j++) for (let i = Math.max(0, i0); i <= Math.min(GW - 1, i1); i++) { const cx = i * CS - WX / 2 + CS / 2, cz = j * CS - WZ / 2 + CS / 2; if (Math.hypot(cx - x, cz - z) <= r + CS * 0.5 && (sols[j * GW + i] === 0 || k === 2 || k === 3)) sols[j * GW + i] = k; } }
 for (let j = 0; j < GH; j++) for (let i = 0; i < GW; i++) { const x = i * CS - WX / 2, z = j * CS - WZ / 2; if (ETANGS.some(e => dansEtang(e, x, z) < 1)) sols[j * GW + i] = 3; }
 
-/* ---- villages : centre, nombre de maisons vers 1805 (ordre de grandeur, à vérifier sur le cadastre), église, château (1 ou -1 : bout de la rue) ---- */
-const VILLAGES = [
-  ['Pratzen', 49.1412, 16.7637, 120, true], ['Kobelnitz', 49.1375, 16.7305, 70, true], ['Puntowitz', 49.1525, 16.7450, 35],
-  ['Sokolnitz', 49.1135, 16.7210, 110, true, 1], ['Telnitz', 49.1015, 16.7170, 100, true], ['Aujezd', 49.1040, 16.7570, 110, true],
-  ['Satschan', 49.0930, 16.7400, 120, true], ['Blasowitz', 49.1665, 16.7865, 70, true], ['Girschikowitz', 49.1640, 16.7560, 50],
-  ['Schlapanitz', 49.1685, 16.7275, 200, true], ['Bellowitz', 49.1755, 16.7400, 40], ['Bosenitz', 49.1915, 16.7715, 100, true],
-  ['Holubitz', 49.1760, 16.8090, 60, true], ['Krzenowitz', 49.1405, 16.8280, 120, true], ['Austerlitz', 49.1535, 16.8740, 350, true, -1],
-  ['Hostieradek', 49.1170, 16.7850, 90, true], ['Zbeischow', 49.1330, 16.8020, 45],
-].map(([nom, lat, lon, n, eglise, chateau]) => ({ nom, lat, lon, n, eglise, chateau }));
-function distRue(x, z, ox, oz, a, L) { const dx = Math.cos(a), dz = Math.sin(a), t = (x - ox) * dx + (z - oz) * dz; return Math.abs(t) > L / 2 + 10 ? 1e9 : Math.abs(-(x - ox) * dz + (z - oz) * dx); }
+const distSeg = (x, z, s) => { const dx = s[2] - s[0], dz = s[3] - s[1], t = Math.max(0, Math.min(1, ((x - s[0]) * dx + (z - s[1]) * dz) / (dx * dx + dz * dz || 1))); return Math.hypot(x - s[0] - dx * t, z - s[1] - dz * t); };
 const HAUTEURS = [['Pratzeberg', 49.1278, 16.7634], ['Santon', 49.1918, 16.7655], ['Žuráň', 49.1795, 16.7345], ['Staré Vinohrady', 49.1555, 16.7930]];
 
 /* ---- routes : la route d'Olmütz et celle d'Austerlitz, puis des chemins de village à village ---- */
@@ -65,10 +57,12 @@ const ROUTES = [
   { larg: 9, pts: [[49.1838, 16.700], [49.1866, 16.735], [49.1885, 16.762], [49.1902, 16.785], [49.1950, 16.815], [49.2000, 16.850], [49.2035, 16.885]] }, // Brünn - Olmütz
   { larg: 8, pts: [[49.1866, 16.735], [49.1800, 16.770], [49.1735, 16.805], [49.1640, 16.840], [49.1545, 16.866], [49.1525, 16.885]] },              // vers Austerlitz et la Hongrie
 ];
-const CHEMINS = [['Schlapanitz', 'Puntowitz'], ['Puntowitz', 'Kobelnitz'], ['Kobelnitz', 'Sokolnitz'], ['Sokolnitz', 'Telnitz'], ['Telnitz', 'Satschan'], ['Telnitz', 'Aujezd'],
+const CHEMINS = [['Schlapanitz', 'Puntowitz'], ['Puntowitz', 'Kobelnitz'], ['Kobelnitz', 'Sokolnitz'], ['Sokolnitz', 'Telnitz'], ['Telnitz', 'Aujezd'],
   ['Pratzen', 'Puntowitz'], ['Pratzen', 'Kobelnitz'], ['Pratzen', 'Aujezd'], ['Pratzen', 'Krzenowitz'], ['Pratzen', 'Hostieradek'], ['Hostieradek', 'Aujezd'], ['Krzenowitz', 'Austerlitz'],
   ['Krzenowitz', 'Zbeischow'], ['Girschikowitz', 'Puntowitz'], ['Girschikowitz', 'Blasowitz'], ['Blasowitz', 'Holubitz'], ['Blasowitz', 'Krzenowitz'], ['Schlapanitz', 'Bellowitz'],
-  ['Bellowitz', 'Girschikowitz'], ['Bosenitz', 'Blasowitz'], ['Aujezd', 'Satschan'], ['Sokolnitz', 'Aujezd']];
+  ['Bellowitz', 'Girschikowitz'], ['Bosenitz', 'Blasowitz'], ['Sokolnitz', 'Aujezd'], ['Kritschen', 'Bellowitz'], ['Kritschen', 'Welatitz'], ['Welatitz', 'Bosenitz'],
+  ['Bosenitz', 'Siwitz'], ['Siwitz', 'Kowalowitz'], ['Kowalowitz', 'Holubitz'], ['Holubitz', 'Welleschowitz'], ['Welleschowitz', 'Austerlitz'], ['Krzenowitz', 'Birnbaum'], ['Birnbaum', 'Wazan'],
+  ['Wazan', 'Austerlitz'], ['Zbeischow', 'Birnbaum'], ['Zbeischow', 'Scharatitz'], ['Scharatitz', 'Hostieradek'], ['Scharatitz', 'Ottnitz'], ['Ottnitz', 'Milleschowitz']];
 const FAISANDERIE = { lat: 49.1178, lon: 16.7140, lx: 420, lz: 300, ang: 0.15 }; // parc à gibier clos de murs de Sokolnitz
 
 /* ---- outils ---- */
@@ -117,55 +111,76 @@ export function construireCarte(scene, withMist) {
   for (const e of ETANGS) label(e.nom, e.x, e.z); // la glace est peinte par le sol
 
   /* routes et chemins */
-  const pos = Object.fromEntries(VILLAGES.map(v => [v.nom, ll(v.lat, v.lon)]));
+  const horsCarte = (x, z) => Math.abs(x) > WX / 2 - 30 || Math.abs(z) > WZ / 2 - 30;
+  const parNom = {};
+  for (const v of VILLAGES) { // vraies rues : mètres depuis le centre (x est, y nord) -> carte, coupées au bord
+    [v.x, v.z] = ll(v.lat, v.lon); parNom[v.nom] = v; v.rues = [];
+    for (const r of (RUES[v.actuel] || '').split(';')) { let cour = [];
+      for (const p of r.trim().split(/\s+/)) { const [x, y] = p.split(',').map(Number), q = [v.x + x, v.z - y]; if (horsCarte(q[0], q[1])) { if (cour.length > 1) v.rues.push(cour); cour = []; } else cour.push(q); }
+      if (cour.length > 1) v.rues.push(cour); }
+  }
+  const grilleRoutes = new Map(), cle = (x, z) => Math.floor(x / 20) + ',' + Math.floor(z / 20); // où passent routes et chemins, pour ne pas bâtir dessus
+  const noteRoute = p => { const k = cle(p[0], p[1]); if (!grilleRoutes.has(k)) grilleRoutes.set(k, []); grilleRoutes.get(k).push(p); };
+  const presRoute = (x, z, d) => { for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const p of grilleRoutes.get(cle(x + i * 20, z + j * 20)) || []) if (Math.hypot(p[0] - x, p[1] - z) < d) return true; return false; };
+  const sortie = (a, b) => { let m = [a.x, a.z], dm = 1e9; for (const r of a.rues) for (const p of r) { const d = Math.hypot(p[0] - b.x, p[1] - b.z); if (d < dm) { dm = d; m = p; } } return m; }; // le bout de rue qui regarde le village voisin
   const routes = [], chemins = [];
-  for (const r of ROUTES) { const { g, fin } = ruban(r.pts.map(([la, lo]) => ll(la, lo)), r.larg, 0.35); routes.push(g); fin.forEach(p => marque(p[0], p[1], r.larg / 2, 'route')); }
+  for (const r of ROUTES) { const { g, fin } = ruban(r.pts.map(([la, lo]) => ll(la, lo)), r.larg, 0.35); routes.push(g); fin.forEach(p => { marque(p[0], p[1], r.larg / 2, 'route'); noteRoute(p); }); }
   for (const [a, b] of CHEMINS) {
-    const [x0, z0] = pos[a], [x1, z1] = pos[b], d = Math.hypot(x1 - x0, z1 - z0), c = (rnd(x0, z1) - 0.5) * 0.25 * d; // léger détour
+    const [x0, z0] = sortie(parNom[a], parNom[b]), [x1, z1] = sortie(parNom[b], parNom[a]), d = Math.hypot(x1 - x0, z1 - z0) || 1, c = (rnd(x0, z1) - 0.5) * 0.2 * d; // léger détour
     const mx = (x0 + x1) / 2 - (z1 - z0) / d * c, mz = (z0 + z1) / 2 + (x1 - x0) / d * c;
     const pts = []; for (let k = 0; k <= 12; k++) { const t = k / 12, u = 1 - t; pts.push([u * u * x0 + 2 * u * t * mx + t * t * x1, u * u * z0 + 2 * u * t * mz + t * t * z1]); }
-    const { g, fin } = ruban(pts, 4.5, 0.3); chemins.push(g); fin.forEach(p => marque(p[0], p[1], 2.5, 'route'));
+    const { g, fin } = ruban(pts, 4.5, 0.3); chemins.push(g); fin.forEach(p => { marque(p[0], p[1], 2.5, 'route'); noteRoute(p); });
   }
   scene.add(new THREE.Mesh(mergeGeometries(routes), matRuban(withMist, 0x8a7b62)));
   scene.add(new THREE.Mesh(mergeGeometries(chemins), matRuban(withMist, 0x7d6f58)));
 
-  /* villages à l'échelle 1/1 : villages-rues moraves. Les maisons se serrent tous les 16 m des deux côtés d'une large rue,
-     chacune avec sa grange au fond de la cour et son verger. Au-delà d'un kilomètre de rue, le village prend une rue en croix, puis des rues parallèles. */
-  const W = 0xe6e0d0, PAS_MAISON = 16;
+  /* villages à l'échelle 1/1, sur leur vrai plan : les maisons s'alignent le long des vraies rues (src/villages.js), le mur long sur la rue comme en Moravie,
+     en partant du centre jusqu'au nombre de maisons de 1805. Grange au fond de la cour, verger derrière ; église et château à leur vraie place. */
+  const W = 0xe6e0d0;
   const gEglise = mergeGeometries([boite(10, 8, 22, 0, 4, 0, W), toit(10, 5, 22, 8, 0x6e3b2a), boite(6, 20, 6, 0, 10, -13, W), boite(6.4, 6, 6.4, 0, 22, -13, 0x4e5a52)]);
   const gGrange = mergeGeometries([boite(7.5, 3.6, 12, 0, 1.8, 0, 0x7a6248), toit(7.5, 4.4, 12, 3.6, 0x8d7a52)]);
   const gChateau = mergeGeometries([boite(46, 11, 14, 0, 5.5, 0, 0xe9e2cf), toit(14, 6, 46, 11, 0x7a3f2c).rotateY(Math.PI / 2), boite(12, 14, 16, -19, 7, 0, 0xe9e2cf), boite(12, 14, 16, 19, 7, 0, 0xe9e2cf)]);
-  const maisons = [], granges = [], eglises = [], chateaux = [], arbres = [], lots = [];
-  VILLAGES.forEach((v, vi) => {
-    const [cx, cz] = ll(v.lat, v.lon); v.x = cx; v.z = cz;
-    const gx = altAt(cx + 30, cz) - altAt(cx - 30, cz), gz = altAt(cx, cz + 30) - altAt(cx, cz - 30);
-    const ang = Math.hypot(gx, gz) > 0.4 ? Math.atan2(gx, -gz) : rnd(cx, cz) * Math.PI; // rue principale le long des courbes de niveau
-    const nRues = Math.max(1, Math.ceil(v.n * PAS_MAISON / 2 / 1000)), L = v.n * PAS_MAISON / 2 / nRues; v.long = L;
-    const rues = [[0, 0, ang], [0, 0, ang + Math.PI / 2], [0, 115, ang], [0, -115, ang], [L * 0.3, 0, ang + Math.PI / 2], [-L * 0.3, 0, ang + Math.PI / 2]].slice(0, nRues); // [décalage le long, en travers, direction]
-    const du = Math.cos(ang), dv = Math.sin(ang), deja = maisons.length;
-    rues.forEach(([ol, ot, a], ri) => {
-      const dx = Math.cos(a), dz = Math.sin(a), ox = cx + du * ol - dv * ot, oz = cz + dv * ol + du * ot, onde = t => Math.sin(t / L * 3 + cx + ri) * L * 0.035;
-      const pt = (t, lat) => [ox + dx * t - dz * (onde(t) + lat), oz + dz * t + dx * (onde(t) + lat)];
-      const axe = []; for (let k = 0; k <= 24; k++) axe.push(pt((k / 24 - 0.5) * (L + 20), 0));
-      const { g, fin } = ruban(axe, 9, 0.32); scene.add(new THREE.Mesh(g, matRuban(withMist, 0x7d6f58))); fin.forEach(p => marque(p[0], p[1], 4.5, 'route'));
-      let lot = null;
-      for (let i = 0; i < Math.floor(L / PAS_MAISON); i++) for (const cote of [-1, 1]) {
-        const t = -L / 2 + (i + 0.5) * PAS_MAISON + (rnd(i, cx + cote + ri) - 0.5) * 3, rec = 13 + rnd(cz, i * cote + ri) * 3, [x, z] = pt(t, cote * rec);
-        if (solAt(x, z) === 'eau' || solAt(x, z) === 'glace') continue;
-        let libre = true; for (let q = deja; q < maisons.length && libre; q++) if (Math.hypot(maisons[q].x - x, maisons[q].z - z) < 11) libre = false;
-        if (!libre) continue;
-        if (ri && rues.some(([l2, t2, a2], rj) => rj < ri && distRue(x, z, cx + du * l2 - dv * t2, cz + dv * l2 + du * t2, a2, L) < 9)) continue; // pas de maison au milieu d'une autre rue
-        const m = { x, z, a: a + (rnd(x, z) - 0.5) * 0.1, y: Math.min(yAt(x - 4, z - 6), yAt(x + 4, z + 6), yAt(x, z)), c: rnd(z, x) };
-        maisons.push(m); marque(x, z, 9, 'village');
-        if (!lot || lot.ms.length >= 40) lots.push(lot = { ms: [] }); lot.ms.push(m);
-        if (rnd(x, i) < 0.6) { const [bx, bz] = pt(t + (rnd(i, 7) - 0.5) * 4, cote * (rec + 26 + rnd(7, i) * 6)); if (solAt(bx, bz) === 'champ') { granges.push({ x: bx, z: bz, a: a + Math.PI / 2 + (rnd(bx, bz) - 0.5) * 0.2, y: Math.min(yAt(bx - 5, bz - 5), yAt(bx + 5, bz + 5), yAt(bx, bz)) }); marque(bx, bz, 8, 'village'); } }
-        if (rnd(x, i + 3) < 0.5) { const [ax, az] = pt(t + (rnd(i, 9) - 0.5) * 8, cote * (rec + 44 + rnd(9, i) * 14)); if (solAt(ax, az) === 'champ') arbres.push([ax, az, 0.8]); } // vergers au fond des parcelles
+  const maisons = [], granges = [], eglises = [], chateaux = [], arbres = [], lots = [], gRues = [];
+  VILLAGES.forEach(v => {
+    const cx = v.x, cz = v.z, segs = [], cands = [], ms = [], gs = [], clos = [];
+    for (const r of v.rues) {
+      const { g, fin } = ruban(r, 7, 0.32); gRues.push(g); fin.forEach(p => marque(p[0], p[1], 3.5, 'route'));
+      for (let k = 0; k < r.length - 1; k++) segs.push([r[k][0], r[k][1], r[k + 1][0], r[k + 1][1]]);
+    }
+    const rue = (x, z) => { let d = 1e9; for (const s of segs) d = Math.min(d, distSeg(x, z, s)); return d; };
+    if (v.eglise) { const [x, z] = ll(...v.eglise); if (!horsCarte(x, z)) { eglises.push({ x, z, a: 0, y: yAt(x, z) }); clos.push([x, z, 24]); marque(x, z, 14, 'village'); } } // chœur à l'est, clocher à l'ouest
+    if (v.chateau) { const [x, z] = ll(...v.chateau); chateaux.push({ x, z, a: 0, y: Math.min(yAt(x, z), yAt(x + 20, z), yAt(x - 20, z)) }); clos.push([x, z, 48]); marque(x, z, 26, 'village'); label('Château', x, z); }
+    v.rues.forEach((r, ri) => { // une place de maison tous les 15 m, des deux côtés de chaque rue
+      let fait = 0, suiv = 7.5;
+      for (let k = 0; k < r.length - 1; k++) {
+        const dx = r[k + 1][0] - r[k][0], dz = r[k + 1][1] - r[k][1], l = Math.hypot(dx, dz) || 1, ux = dx / l, uz = dz / l;
+        for (; suiv <= fait + l; suiv += 14.6 + rnd(suiv, ri + cx) * 1.6) for (const cote of [-1, 1]) {
+          const t = suiv - fait, px = r[k][0] + ux * t, pz = r[k][1] + uz * t, pignon = rnd(px * cote, pz) < 0.14, rec = pignon ? 11.5 + rnd(pz, px * cote) * 1.5 : 8.6 + rnd(pz, px * cote) * 2;
+          const x = px - uz * cote * rec, z = pz + ux * cote * rec;
+          if (rue(x, z) > rec - 0.5) cands.push({ x, z, nx: -uz * cote, nz: ux * cote, ux, uz, a: Math.atan2(uz, ux) + (pignon ? 0 : -Math.PI / 2) + (rnd(x, z) - 0.5) * 0.06, d: Math.hypot(x - cx, z - cz) });
+        }
+        fait += l;
       }
     });
-    if (v.eglise) { const ex = cx - dv * 34 + du * 20, ez = cz + du * 34 + dv * 20; eglises.push({ x: ex, z: ez, a: ang, y: yAt(ex, ez) }); marque(ex, ez, 14, 'village'); }
-    if (v.chateau) { const k = L / 2 + 70, hx = cx + du * k * v.chateau - dv * 30, hz = cz + dv * k * v.chateau + du * 30; chateaux.push({ x: hx, z: hz, a: ang, y: Math.min(yAt(hx, hz), yAt(hx + du * 20, hz + dv * 20), yAt(hx - du * 20, hz - dv * 20)) }); marque(hx, hz, 26, 'village'); label('Château', hx, hz); }
+    cands.sort((p, q) => p.d - q.d);
+    for (const m of cands) { if (ms.length >= v.n) break;
+      const { x, z } = m, sol = solAt(x, z);
+      if (sol === 'eau' || sol === 'glace' || horsCarte(x, z) || presRoute(x, z, 9) || clos.some(c => Math.hypot(c[0] - x, c[1] - z) < c[2]) || ms.some(o => Math.hypot(o.x - x, o.z - z) < 13.8)) continue;
+      m.y = Math.min(yAt(x - 4, z - 6), yAt(x + 4, z + 6), yAt(x, z)); m.c = rnd(z, x); ms.push(m);
+    }
+    for (const m of ms) marque(m.x, m.z, 9, 'village');
+    ms.forEach((m, i) => { // granges en travers au fond des cours, vergers derrière
+      if (rnd(m.x, i) < 0.6) { const k = 21 + rnd(i, 7) * 5, o = (rnd(7, i) - 0.5) * 5, x = m.x + m.nx * k + m.ux * o, z = m.z + m.nz * k + m.uz * o;
+        if (solAt(x, z) === 'champ' && rue(x, z) > 11 && !presRoute(x, z, 9) && !clos.some(c => Math.hypot(c[0] - x, c[1] - z) < c[2]) && !ms.some(q => Math.hypot(q.x - x, q.z - z) < 12) && !gs.some(q => Math.hypot(q.x - x, q.z - z) < 13)) gs.push({ x, z, a: Math.atan2(m.uz, m.ux) - Math.PI / 2 + (rnd(x, z) - 0.5) * 0.15, y: Math.min(yAt(x - 5, z - 5), yAt(x + 5, z + 5), yAt(x, z)) }); }
+      for (let q = 0; q < 2; q++) if (rnd(m.x + q, i + 3) < 0.45) { const k = 36 + rnd(i, 9 + q) * 22, o = (rnd(9 + q, i) - 0.5) * 12, x = m.x + m.nx * k + m.ux * o, z = m.z + m.nz * k + m.uz * o; if (solAt(x, z) === 'champ' && rue(x, z) > 8) arbres.push([x, z, 0.8]); }
+    });
+    for (const g of gs) { marque(g.x, g.z, 8, 'village'); granges.push(g); }
+    ms.sort((p, q) => (Math.floor(p.x / 160) - Math.floor(q.x / 160)) || (p.z - q.z)); // paquets de maisons voisines, pour le détail de près
+    for (let i = 0; i < ms.length; i += 40) lots.push({ ms: ms.slice(i, i + 40) });
+    maisons.push(...ms); v.maisons = ms.length;
     label(v.nom, cx, cz);
   });
+  if (gRues.length) scene.add(new THREE.Mesh(mergeGeometries(gRues), matRuban(withMist, 0x7d6f58)));
   for (const [nom, la, lo] of HAUTEURS) { const [x, z] = ll(la, lo); label(nom, x, z, true); }
 
   const matBati = withMist(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));

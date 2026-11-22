@@ -35,6 +35,7 @@ Double-cliquer sur `construire-exe.bat` après chaque mise à jour du code (ou `
 - `src/menu.js` : le menu principal (Échap pour y revenir).
 - `appli/` : la fenêtre du .exe (Electron).
 - `src/carte.js` : la carte : sol, ruisseaux, étangs gelés, routes, villages, faisanderie, et `solAt(x, z)` qui donne la nature du sol (champ, route, eau, glace, village, bois).
+- `src/villages.js` : centres et tracés de rues réels des villages (données OpenStreetMap).
 - `src/heights.js` : le relief et les ruisseaux, fabriqués par `python3 outils/relief.py` à partir des images de `donnees/` (les tuiles manquantes sont téléchargées).
 - `outils/meshy/` : génère les modèles avec l'API Meshy à partir d'une liste d'unités (`npm run meshy`), voir `outils/meshy/LISEZ-MOI.md`.
 - `src/unites.js` : les modèles des soldats et des objets fixes (canon), partagés par le jeu et la galerie.
@@ -54,5 +55,5 @@ Double-cliquer sur `construire-exe.bat` après chaque mise à jour du code (ou `
 
 ## À vérifier
 - L'ordre de bataille et les positions de départ sont provisoires.
-- Les villages sont à l'échelle 1/1 (maisons de 7 × 13 m tous les 16 m), mais leur nombre de maisons est un ordre de grandeur pour 1805 et le tracé des rues est inventé. Leur position, les routes, la faisanderie de Sokolnitz, les châteaux et les étangs sont placés approximativement, à vérifier sur une carte d'époque.
+- Les villages sont à l'échelle 1/1 et suivent leur vrai plan : centres, rues, églises et châteaux viennent d'OpenStreetMap (`src/villages.js`, © les contributeurs d'OpenStreetMap, licence ODbL). Ce sont les rues d'aujourd'hui, qui gardent pour l'essentiel le tracé ancien ; le nombre de maisons de 1805 reste un ordre de grandeur. Les chemins entre villages, la faisanderie de Sokolnitz, la forme des châteaux et celle des étangs sont encore approximatifs.
 - Tout est à l'échelle 1/1 : distances, relief et taille des soldats. `VE` (src/carte.js) et `SC` (src/main.js) permettent de regrossir le relief ou les figurines.
