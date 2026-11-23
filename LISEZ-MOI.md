@@ -37,6 +37,7 @@ Double-cliquer sur `construire-exe.bat` après chaque mise à jour du code (ou `
 - `src/menu.js` : le menu principal (Échap pour y revenir).
 - `appli/` : la fenêtre du .exe (Electron).
 - `src/carte.js` : la carte : sol, ruisseaux, étangs gelés, routes, villages, faisanderie, et `solAt(x, z)` qui donne la nature du sol (champ, route, eau, glace, village, bois).
+- `src/campagne.js` : la campagne autour : parcellaire en lanières (blé d'hiver, labours, chaumes, jachères), mezes et chemins de terre entre les quartiers, jardins, herbes près de la caméra (portée réduite automatiquement si les images ralentissent), buissons, poiriers, clôtures des cours, enclos, vergers, meules, croix et bosquets.
 - `src/villages-combat.js` : les villages au combat : postes de la garnison, fumées aux fenêtres, portes enfoncées, toits troués, obus, incendie et ruines (particules et état des bâtiments). Les règles (qui entre, qui cède) sont dans `src/main.js`, section VILLAGES. Les îlots et le matériau qui montre les dégâts sont dans `src/carte.js`.
 - `src/villages.js` : centres et tracés de rues réels des villages (données OpenStreetMap).
 - `src/heights.js` : le relief et les ruisseaux, fabriqués par `python3 outils/relief.py` à partir des images de `donnees/` (les tuiles manquantes sont téléchargées).

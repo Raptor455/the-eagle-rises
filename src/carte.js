@@ -7,6 +7,7 @@ import { HW, HH, H64, CADRE, RUISSEAUX } from './heights.js';
 import MAISON from './modeles/maison.js';
 import { objet } from './unites.js';
 import { VILLAGES, RUES } from './villages.js';
+import { creerParcellaire, creerInfoSol, bosquets, habiller, GLSL_PARC } from './campagne.js';
 
 export const TILE = CADRE.tuile, WX = (CADRE.x1 - CADRE.x0) * TILE, WZ = (CADRE.y1 - CADRE.y0) * TILE, VE = 1, H0 = 180; // VE : grossissement du relief à l'affichage (1 = taille réelle)
 const N = 2 ** CADRE.z;
@@ -222,7 +223,7 @@ export function construireCarte(scene, withMist) {
     }
     ms.sort((p, q) => (Math.floor(p.x / 160) - Math.floor(q.x / 160)) || (p.z - q.z)); // paquets de maisons voisines, pour le détail de près
     for (let i = 0; i < ms.length; i += 40) lots.push({ ms: ms.slice(i, i + 40) });
-    maisons.push(...ms); v.maisons = ms.length;
+    for (const m of ms) m.v = v; maisons.push(...ms); v.maisons = ms.length;
     label(v.nom, cx, cz);
   });
   if (gRues.length) scene.add(new THREE.Mesh(mergeGeometries(gRues), matRuban(withMist, 0x7d6f58)));
@@ -256,6 +257,9 @@ export function construireCarte(scene, withMist) {
     for (let k = 0; k < 4; k++) { const [x0, z0] = mur[k], [x1, z1] = mur[k + 1], n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 6); for (let t = 0; t < n; t++) { const x = x0 + (x1 - x0) * (t + 0.5) / n, z = z0 + (z1 - z0) * (t + 0.5) / n; murs.push(boite(6.2, 2.4, 0.6, 0, 0, 0, 0xcfc6b2).rotateY(-Math.atan2(z1 - z0, x1 - x0)).translate(x, yAt(x, z) + 1, z)); } }
     scene.add(new THREE.Mesh(mergeGeometries(murs), matBati)); label('Faisanderie', fx, fz); }
 
+  /* bosquets d'aulnes et de saules au bord des ruisseaux (src/campagne.js) */
+  bosquets(RUISSEAUX, solAt, marque, arbres, rnd, (x, z, d) => maisons.some(m => Math.abs(m.x - x) < d && Math.abs(m.z - z) < d));
+
   /* arbres d'hiver : tronc et houppier dénudé, répétés par la carte graphique */
   { const g = mergeGeometries([boite(0.6, 5, 0.6, 0, 2.5, 0, 0x4a3b2c), teinte(new THREE.IcosahedronGeometry(4.2, 0).translate(0, 7.5, 0).scale(1, 1.15, 1), 0x5d5446)]);
     for (const a of rives) if (solAt(a[0], a[1]) === 'champ') arbres.push(a);
@@ -263,8 +267,10 @@ export function construireCarte(scene, withMist) {
     arbres.forEach(([x, z, s], i) => { mQ.setFromAxisAngle(Y, rnd(x, z) * 6.28); mS.setScalar(s * (0.8 + rnd(z, x) * 0.5)); im.setMatrixAt(i, mM.compose(mV.set(x, yAt(x, z) - 0.3, z), mQ, mS)); im.setColorAt(i, col.setScalar(0.85 + rnd(x, 2) * 0.3)); });
     mS.setScalar(1); scene.add(im); }
 
-  /* sol, à la manière des jeux de stratégie : une texture de bruit répétée à plusieurs échelles mêle herbe d'hiver,
-     chaumes, labours et givre ; les champs ne sont qu'une teinte discrète par-dessus ; le grain accroche la lumière. */
+  /* sol : le parcellaire de src/campagne.js (quartiers de lanières : blé d'hiver, labours, chaumes, jachères ; mezes et chemins
+     de terre entre les quartiers), les jardins autour des villages, les prés des fonds humides, puis une texture de bruit
+     à plusieurs échelles pour la matière, le givre et la glace ; le grain, les sillons et les rangs accrochent la lumière. */
+  const parc = creerParcellaire(WX, WZ, altAt), info = creerInfoSol(sols, GW, GH, CS);
   const g = new THREE.PlaneGeometry(WX, WZ, HW - 1, HH - 1); g.rotateX(-Math.PI / 2);
   const p = g.attributes.position, mod = new Float32Array(p.count * 4);
   for (let k = 0; k < p.count; k++) {
@@ -293,63 +299,84 @@ export function construireCarte(scene, withMist) {
   const mat = withMist(new THREE.MeshLambertMaterial()), avant = mat.onBeforeCompile;
   mat.customProgramCacheKey = () => 'sol';
   mat.onBeforeCompile = sh => {
-    avant(sh); sh.uniforms.uBruit = { value: bruit };
+    avant(sh); Object.assign(sh.uniforms, parc.uniforms); sh.uniforms.uBruit = { value: bruit }; sh.uniforms.uInfo = { value: info.tex }; sh.uniforms.uMonde = { value: new THREE.Vector4(WX, WZ, GW * CS, GH * CS) };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aMod; varying vec4 vMod; varying vec2 vXZ;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMod = aMod; vXZ = position.xz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-varying vec4 vMod; varying vec2 vXZ; uniform sampler2D uBruit; vec3 solBosse;
+varying vec4 vMod; varying vec2 vXZ; uniform sampler2D uBruit; uniform sampler2D uInfo; uniform vec4 uMonde; vec3 solBosse;
 float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 vec4 nz(vec2 p, float s){ return texture2D(uBruit, p / s); }
-vec3 lin(vec3 c){ return pow(c, vec3(2.2)); }`)
+vec3 lin(vec3 c){ return pow(c, vec3(2.2)); }
+${GLSL_PARC}`)
       .replace('#include <color_fragment>', `
 { vec2 p = vXZ, pa = mat2(0.8, 0.6, -0.6, 0.8) * p, pb = mat2(0.36, -0.93, 0.93, 0.36) * p; // échelles tournées l'une par rapport à l'autre : pas de motif qui se répète
-  vec4 M = nz(p, 3100.0), K = nz(pa + 371.0, 730.0), K2 = nz(pb, 1670.0), D = nz(pb + 53.0, 97.0), F = nz(pa, 17.0), G = nz(p + 7.0, 4.3);
-  float loin = smoothstep(0.02, 0.5, fwidth(p.x));                      // 0 de près, 1 de loin
-  /* parcellaire : quartiers irréguliers, lanières à peu près parallèles dans un quartier, bords tremblés */
-  vec2 w = p + (K.ra - 0.5) * 90.0 + (M.ar - 0.5) * 420.0 + (D.ra - 0.5) * 9.0;
-  vec2 bc = floor(w / 950.0), blk = bc; float bd = 1e9;
-  for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) { vec2 c = bc + vec2(i, j), o = (c + 0.15 + 0.7 * vec2(h21(c), h21(c + 5.7))) * 950.0; float dd = dot(w - o, w - o); if (dd < bd) { bd = dd; blk = c; } }
-  float an = 0.45 + floor(h21(blk) * 2.0) * 1.5708 + (h21(blk + 9.0) - 0.5) * 0.5, ca = cos(an), sa = sin(an);
-  vec2 q = vec2(ca * w.x + sa * w.y, -sa * w.x + ca * w.y);
-  float sw = 55.0 + h21(blk + 3.1) * 90.0, sid = floor(q.x / sw), sl = 320.0 + h21(vec2(sid, blk.x)) * 520.0, qy = q.y + h21(vec2(blk.y, sid)) * sl;
-  float seg = floor(qy / sl), r = h21(vec2(sid, seg) + blk * 17.0), r2 = h21(vec2(seg, sid) + blk * 5.0);
-  vec2 m = (0.5 - abs(fract(vec2(q.x / sw, qy / sl)) - 0.5)) * vec2(sw, sl); float bord = 1.0 - smoothstep(0.5, 3.5 + fwidth(q.x) * 1.5, min(m.x, m.y));
-  vec3 herbe = lin(vec3(0.40, 0.43, 0.27)), seche = lin(vec3(0.56, 0.52, 0.34)), chaume = lin(vec3(0.63, 0.57, 0.37)), labour = lin(vec3(0.33, 0.27, 0.20)), terre = lin(vec3(0.42, 0.35, 0.26));
+  vec4 M = nz(p, 3100.0), K = nz(pa + 371.0, 730.0), K2 = nz(pb, 1670.0), D = nz(pb + 53.0, 97.0), F = nz(pa, 17.0), G = nz(p + 7.0, 4.3), J = nz(p, 730.0);
+  float fw = fwidth(p.x) + fwidth(p.y);                                   // mètres par pixel
+  float loin = smoothstep(0.02, 0.5, fwidth(p.x)), pres = 1.0 - smoothstep(0.15, 0.7, fwidth(p.x));
+  vec4 inf = texture2D(uInfo, (p + uMonde.xy * 0.5) / uMonde.zw); float dv = inf.r * 510.0;
+  vec3 herbe = lin(vec3(0.40, 0.43, 0.27)), seche = lin(vec3(0.56, 0.52, 0.34)), chaume = lin(vec3(0.62, 0.56, 0.37)), labour = lin(vec3(0.31, 0.25, 0.19)), terre = lin(vec3(0.42, 0.35, 0.26));
+  vec3 vert = lin(vec3(0.33, 0.43, 0.20)), terreO = lin(vec3(0.38, 0.31, 0.23)), chemin = lin(vec3(0.50, 0.43, 0.33)), mez = lin(vec3(0.43, 0.44, 0.28));
   /* fond naturel : herbe d'hiver plus ou moins sèche, par grandes nappes */
   vec3 fond = mix(herbe, seche, smoothstep(0.25, 0.75, M.r * 0.4 + K2.r * 0.35 + K.a * 0.25));
-  float estLabour = step(r, 0.24), estChaume = step(0.24, r) * step(r, 0.52);
-  vec3 champ = estLabour > 0.5 ? mix(labour, terre, r2 * 0.6) : estChaume > 0.5 ? mix(chaume, seche, r2 * 0.7) : mix(herbe, seche, r2);
-  champ *= 0.9 + 0.2 * h21(vec2(sid, seg) + 1.7);
-  /* sillons et rangs de chaume, visibles de près seulement */
-  float qs = (ca * p.x + sa * p.y) * (estLabour > 0.5 ? 2.6 : 5.2) + K.r * 5.0, rang = sin(qs), pres = 1.0 - smoothstep(0.15, 0.7, fwidth(p.x)); // sillons droits : coordonnée non tremblée
-  champ *= 1.0 + (estLabour * 0.22 + estChaume * 0.10) * rang * pres;
-  vec3 c = mix(fond, champ, 0.82 * (1.0 - 0.5 * smoothstep(0.55, 0.8, K2.b)));     // par endroits les champs s'effacent dans la friche
-  c = mix(c, herbe * 0.8, bord * 0.55);                                           // lisières herbeuses entre parcelles
+  /* la lanière : sa sole, sa teinte propre, ses rangs ou ses sillons (de près) */
+  Parc P = parcelle(p); int t = P.type; float rs = P.rs;
+  float rq = P.q.x, fq = max(fwidth(rq), 1e-4);
+  float rangs = 1.0 - smoothstep(0.02, 0.07, fq), sill = 1.0 - smoothstep(0.06, 0.25, fq);
+  float rangB = smoothstep(0.32, 0.12, abs(fract(rq / 0.17 + D.g * 0.3) - 0.5));  // rangs de blé tous les 17 cm
+  float sillon = sin(rq * 6.2832 / 0.42 + F.g * 2.0);                              // sillons de labour tous les 42 cm
+  vec3 champ; float estLabour = 0.0, estChaume = 0.0;
+  if (t == 0) champ = mix(terreO, vert, mix(0.42 + 0.2 * (rs - 0.5) + 0.25 * (D.r - 0.5), rangB * (0.7 + 0.3 * F.g), rangs));
+  else if (t == 1) { champ = mix(labour, terre, rs * 0.5 + D.r * 0.2); estLabour = 1.0; }
+  else if (t == 2) { champ = mix(chaume, seche, rs * 0.6) * (1.0 + 0.14 * rangB * rangs - 0.07 * rangs); estChaume = 1.0; }
+  else champ = mix(mix(herbe, seche, 0.35 + rs * 0.4), terre, smoothstep(0.6, 0.85, D.b) * 0.4);
+  champ *= 0.86 + 0.28 * rs;
+  champ *= 1.0 + estLabour * 0.12 * sillon * sill;
+  vec3 c = mix(fond, champ, 0.92);
+  /* mezes entre les lanières, tournières au bout, et bande ou chemin de terre entre les quartiers */
+  float wM = smoothstep(0.45 + fw * 0.5, 0.45 - fw * 0.5, P.mx) * min(1.0, 0.9 / max(fw, 0.9)) * 0.8;   // trait fin : de loin, il ne pèse que sa part du pixel
+  float wT = smoothstep(2.0 + fw * 0.5, 2.0 - fw * 0.5, P.my) * min(1.0, 4.0 / max(fw, 4.0));
+  c = mix(c, mez * (0.8 + 0.3 * D.r), max(wM, wT));
+  float lB = P.piste > 0.5 ? 1.7 : 2.4, wB = smoothstep(lB + fw * 0.5, lB - fw * 0.5, P.eBloc) * min(1.0, 2.0 * lB / max(fw, 2.0 * lB));
+  vec3 bande = P.piste > 0.5 ? mix(chemin * (0.88 + 0.22 * D.g) * (1.0 - 0.2 * smoothstep(0.3, 0.0, abs(P.eBloc - 0.8)) * pres), mez * 0.85, smoothstep(0.35, 0.15, P.eBloc) * pres) // ornières et herbe au milieu
+    : mez * (0.8 + 0.3 * D.r);
+  c = mix(c, bande, wB);
+  /* prés des fonds humides, jardins et vergers autour des villages, cours, bois */
+  c = mix(c, mix(lin(vec3(0.36, 0.42, 0.24)), seche, D.r * 0.5), smoothstep(0.45, 0.65, vMod.y + (K.a - 0.5) * 0.15) * 0.85);
+  float wJ = 1.0 - smoothstep(30.0, 40.0, dv - 34.0 * J.r);
+  vec2 pj = floor(p / 9.0); float potager = step(h21(pj), 0.3) * (1.0 - smoothstep(14.0, 24.0, dv));
+  vec3 jardin = mix(lin(vec3(0.34, 0.38, 0.22)) * (0.85 + 0.3 * D.r), mix(terre, labour, 0.5) * (1.0 + 0.15 * sin(p.x * 20.0) * pres), potager);
+  c = mix(c, jardin, wJ);
+  c = mix(c, mix(terre, herbe, 0.4 + 0.3 * D.r), (1.0 - smoothstep(3.0, 8.0, dv)) * 0.7);
+  c = mix(c, lin(vec3(0.33, 0.27, 0.20)) * (0.8 + 0.4 * D.r), inf.a * 0.9);
+  estLabour *= (1.0 - wJ) * (1.0 - max(wM, wB)); estChaume *= (1.0 - wJ);
   /* matière : touffes, terre nue, mottes */
   float grain = D.g * 0.45 + F.g * 0.35 + G.g * 0.2;
-  c = mix(c, terre, (1.0 - estLabour) * smoothstep(0.55, 0.85, F.b * 0.6 + D.b * 0.4) * 0.35);
-  c = mix(c, herbe * 0.7, (1.0 - estLabour) * smoothstep(0.6, 0.9, G.g) * 0.35 * (1.0 - loin));
-  c *= 0.84 + 0.4 * grain; c *= 0.9 + 0.2 * K.b;
-  /* pentes en herbe rase, fonds humides sombres et roussis */
-  c = mix(c, mix(herbe, seche, D.r) * (0.75 + 0.5 * grain), vMod.x * 0.85);
+  c = mix(c, terre, (1.0 - estLabour) * smoothstep(0.6, 0.88, F.b * 0.6 + D.b * 0.4) * 0.3);
+  c = mix(c, herbe * 0.7, (1.0 - estLabour) * smoothstep(0.6, 0.9, G.g) * 0.3 * (1.0 - loin));
+  c *= 0.86 + 0.34 * grain; c *= 0.92 + 0.16 * K.b;
+  /* pentes fortes en herbe rase (pâtures) */
+  c = mix(c, mix(herbe, seche, D.r) * (0.75 + 0.5 * grain), vMod.x * 0.6);
   vec3 humide = mix(lin(vec3(0.27, 0.31, 0.21)), lin(vec3(0.45, 0.38, 0.24)), smoothstep(0.4, 0.7, D.a)) * (0.7 + 0.6 * grain);
-  c = mix(c, humide, clamp(vMod.y * (0.6 + 0.8 * K.a), 0.0, 1.0) * 0.9);
+  c = mix(c, humide, clamp((vMod.y - 0.5) * (0.6 + 0.8 * K.a), 0.0, 1.0) * 0.6);
   /* givre : par plaques, plus sur les hauteurs, dans les creux des sillons et à l'ombre */
-  float gv = vMod.z * 0.55 + (K2.a - 0.5) * 0.5 + (M.a - 0.5) * 0.4 + (nz(pa + 91.0, 1230.0).r - 0.5) * 0.3 + ((D.r - 0.5) * 0.3 + (F.g - 0.5) * 0.25) * (1.0 - loin) - estLabour * rang * pres * 0.12 + 0.1;
+  float gv = vMod.z * 0.55 + (K2.a - 0.5) * 0.5 + (M.a - 0.5) * 0.4 + (nz(pa + 91.0, 1230.0).r - 0.5) * 0.3 + ((D.r - 0.5) * 0.3 + (F.g - 0.5) * 0.25) * (1.0 - loin) - estLabour * sillon * sill * 0.12 + 0.05;
   vec3 givre = lin(vec3(0.90, 0.93, 0.94)) * (0.88 + 0.2 * G.g);
-  c = mix(c, givre, smoothstep(0.42, 0.85, gv) * 0.7 + 0.05);
+  c = mix(c, givre, smoothstep(0.45, 0.88, gv) * 0.6 + 0.04);
   vec3 glace = lin(vec3(0.72, 0.79, 0.83)) * (0.88 + 0.16 * K.r) - 0.06 * smoothstep(0.80, 0.86, D.b) + 0.10 * smoothstep(0.6, 0.9, F.g * K.a * 1.6);
   c = mix(c, glace, smoothstep(0.0, 1.0, vMod.w));
   diffuseColor.rgb = c;
-  /* relief du grain sous la lumière rasante */
+  /* relief du grain sous la lumière rasante, sillons et rangs */
   float e1 = 0.5, e2 = 0.12;
   float hx = nz(pa + vec2(e1, 0.0), 17.0).g - nz(pa - vec2(e1, 0.0), 17.0).g + 0.6 * (nz(p + vec2(e2, 0.0) + 7.0, 4.3).g - nz(p - vec2(e2, 0.0) + 7.0, 4.3).g);
   float hz = nz(pa + vec2(0.0, e1), 17.0).g - nz(pa - vec2(0.0, e1), 17.0).g + 0.6 * (nz(p + vec2(0.0, e2) + 7.0, 4.3).g - nz(p - vec2(0.0, e2) + 7.0, 4.3).g);
-  float cr = cos(qs) * (estLabour * 0.5 + estChaume * 0.15) * pres;
-  solBosse = (vec3(-hx, 0.0, -hz) * 0.55 + vec3(-ca, 0.0, -sa) * cr) * (1.0 - vMod.w); }`)
+  float ca = cos(P.ang), sa = sin(P.ang);
+  float cr = cos(rq * 6.2832 / 0.42 + F.g * 2.0) * (estLabour * 0.35 + estChaume * 0.1) * sill;
+  solBosse = (vec3(-hx, 0.0, -hz) * 0.55 + vec3(ca, 0.0, sa) * cr) * (1.0 - vMod.w); }`)
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize(normal + (viewMatrix * vec4(solBosse, 0.0)).xyz);');
   };
   const ground = new THREE.Mesh(g, mat); scene.add(ground);
-  ground.onBeforeRender = (_r, _s, cam) => { for (const v of prochesMaj) { const p = Math.hypot(cam.position.x - v.x, cam.position.y - v.y, cam.position.z - v.z) < v.r; v.pres.visible = p; v.loin.visible = !p; } };
+  const modTex = (() => { const u = new Uint8Array(mod.length); for (let k = 0; k < mod.length; k++) u[k] = Math.round(mod[k] * 255); const t = new THREE.DataTexture(u, HW, HH, THREE.RGBAFormat); t.magFilter = t.minFilter = THREE.LinearFilter; t.needsUpdate = true; return t; })();
+  const majCampagne = habiller(scene, withMist, { WX, WZ, yAt, altAt, solAt, rnd, parc, info, GW, GH, CS, maisons, villages: VILLAGES, hRaw, HW, HH, H0, VE, uMod: modTex, bruit });
+  ground.onBeforeRender = (_r, _s, cam) => { majCampagne(cam); for (const v of prochesMaj) { const p = Math.hypot(cam.position.x - v.x, cam.position.y - v.y, cam.position.z - v.z) < v.r; v.pres.visible = p; v.loin.visible = !p; } };
   return { ground, labels, ilots };
 }
